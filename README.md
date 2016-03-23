@@ -99,7 +99,7 @@ If you want to run it on your laptop:
   godep go build
   ```
 
-* start the application in verbose mode
+* start the application
 
   ```
   ./openshift-github-hooks
