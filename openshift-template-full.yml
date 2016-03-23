@@ -1,0 +1,94 @@
+# This OpenShift template will build a docker image using the Dockerfile found in the git repository, and then deploy it
+# Use it from the CLI with:
+# $ oc new-app -f openshift-template-full.yml -p GITHUB_ACCESS_TOKEN=xxx,SERVICE_ACCOUNT=xxx
+
+kind: Template
+apiVersion: v1
+metadata:
+  name: github-hooks-sync
+  annotations:
+    description: Build and deploy the OpenShift GitHub Hooks Sync application.
+    tags: openshift,github,hooks,sync
+labels:
+  template: github-hooks-sync
+
+parameters:
+
+- name: GITHUB_ACCESS_TOKEN
+  description: The GitHub token used to authenticate to the API - https://github.com/settings/tokens
+  required: true
+- name: SERVICE_ACCOUNT
+  description: The name of a ServiceAccount which has the cluster-reader role
+  required: true
+
+- name: GITHUB_REPO
+  description: The name of the GitHub repository (format "owner/repo")
+  value: vbehar/openshift-github-hooks
+- name: TIMEZONE
+  description: The timezone of the pods
+  value: Europe/Paris
+
+objects:
+
+- kind: ImageStream
+  apiVersion: v1
+  metadata:
+    name: github-hooks
+
+- kind: BuildConfig
+  apiVersion: v1
+  metadata:
+    name: github-hooks
+  spec:
+    strategy:
+      type: Docker
+    source:
+      type: Git
+      git:
+        uri: https://github.com/${GITHUB_REPO}
+    output:
+      to:
+        kind: ImageStreamTag
+        name: github-hooks:latest
+    triggers:
+    - type: ConfigChange
+
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    name: github-hooks-sync
+  spec:
+    replicas: 1
+    strategy:
+      type: Rolling
+      rollingParams:
+        maxUnavailable: 0
+        maxSurge: 1
+    template:
+      metadata:
+        labels:
+          deploymentconfig: github-hooks-sync
+      spec:
+        serviceAccountName: ${SERVICE_ACCOUNT}
+        containers:
+        - name: github-hooks
+          image: github-hooks
+          command:
+          - /openshift-github-hooks
+          - sync
+          - --v=1 # adjust for more (v=3) or less (v=0) logs
+          env:
+          - name: GITHUB_ACCESS_TOKEN
+            value: ${GITHUB_ACCESS_TOKEN}
+          - name: TZ
+            value: ${TIMEZONE}
+    triggers:
+    - type: ConfigChange
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        from:
+          kind: ImageStreamTag
+          name: github-hooks:latest
+        containerNames:
+        - github-hooks-sync

@@ -1,0 +1,9 @@
+machine:
+  services:
+    - docker
+dependencies:
+  override:
+    - docker build -t openshift-github-hooks .
+test:
+  override:
+    - docker run -t openshift-github-hooks

@@ -1,0 +1,63 @@
+# This OpenShift template will deploy a pre-build docker image from DockerHub
+# Use it from the CLI with:
+# $ oc new-app -f openshift-template-deploy-only.yml -p GITHUB_ACCESS_TOKEN=xxx,SERVICE_ACCOUNT=xxx
+
+kind: Template
+apiVersion: v1
+metadata:
+  name: github-hooks-sync-deployer
+  annotations:
+    description: Deploys the OpenShift GitHub Hooks Sync application.
+    tags: openshift,github,hooks,sync
+labels:
+  template: github-hooks-sync-deployer
+
+parameters:
+
+- name: GITHUB_ACCESS_TOKEN
+  description: The GitHub token used to authenticate to the API - https://github.com/settings/tokens
+  required: true
+- name: SERVICE_ACCOUNT
+  description: The name of a ServiceAccount which has the cluster-reader role
+  required: true
+
+- name: IMAGE
+  description: The reference of the Docker image to deploy
+  value: vbehar/openshift-github-hooks:latest
+- name: TIMEZONE
+  description: The timezone of the pods
+  value: Europe/Paris
+
+objects:
+
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    name: github-hooks-sync
+  spec:
+    replicas: 1
+    strategy:
+      type: Rolling
+      rollingParams:
+        maxUnavailable: 0
+        maxSurge: 1
+    template:
+      metadata:
+        labels:
+          deploymentconfig: github-hooks-sync
+      spec:
+        serviceAccountName: ${SERVICE_ACCOUNT}
+        containers:
+        - name: github-hooks-sync
+          image: ${IMAGE}
+          command:
+          - /openshift-github-hooks
+          - sync
+          - --v=1 # adjust for more (v=3) or less (v=0) logs
+          env:
+          - name: GITHUB_ACCESS_TOKEN
+            value: ${GITHUB_ACCESS_TOKEN}
+          - name: TZ
+            value: ${TIMEZONE}
+    triggers:
+    - type: ConfigChange
