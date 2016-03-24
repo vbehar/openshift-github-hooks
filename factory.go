@@ -17,7 +17,7 @@ import (
 func getFactory(flags *pflag.FlagSet) *clientcmd.Factory {
 	factory, err := getFactoryFromCluster()
 	if err != nil {
-		glog.Infof("Seems like we are not running in an OpenShift environment (%s), falling back to building a std factory...", err)
+		glog.V(1).Infof("Seems like we are not running in an OpenShift environment (%s), falling back to building a std factory...", err)
 		factory = clientcmd.New(flags)
 	}
 
