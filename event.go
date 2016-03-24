@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"net/url"
 	"regexp"
+	"strings"
 
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/client"
@@ -45,11 +48,11 @@ func NewEvent(bcNamespacer client.BuildConfigsNamespacer, watchEvent watch.Event
 	for _, trigger := range bc.Spec.Triggers {
 		switch trigger.Type {
 		case buildapi.GitHubWebHookBuildTriggerType:
-			url, err := bcNamespacer.BuildConfigs(bc.Namespace).WebHookURL(bc.Name, &trigger)
+			hookUrl, err := bcNamespacer.BuildConfigs(bc.Namespace).WebHookURL(bc.Name, &trigger)
 			if err != nil {
 				return nil, err
 			}
-			event.HookUrl = url.String()
+			event.HookUrl = fixOpenshiftHookUrl(hookUrl, openshiftPublicUrl)
 			break
 		}
 	}
@@ -69,4 +72,13 @@ func extractRepositoryOwnerAndName(repositoryUri string) (owner, name string) {
 		name = matches[2]
 	}
 	return
+}
+
+// fixOpenshiftHookUrl tranforms the hook URL to make sure it is available through the given public (host) URL
+func fixOpenshiftHookUrl(hookUrl *url.URL, openshiftPublicUrl string) string {
+	if len(openshiftPublicUrl) == 0 {
+		return hookUrl.String()
+	}
+
+	return strings.Replace(hookUrl.String(), fmt.Sprintf("%s://%s", hookUrl.Scheme, hookUrl.Host), openshiftPublicUrl, 1)
 }

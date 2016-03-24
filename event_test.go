@@ -208,3 +208,43 @@ func TestExtractRepositoryOwnerAndName(t *testing.T) {
 		}
 	}
 }
+
+func TestFixOpenshiftHookUrl(t *testing.T) {
+	tests := []struct {
+		hookUrl            string
+		openshiftPublicUrl string
+		expectedResult     string
+	}{
+		{
+			hookUrl:            "https://somewhere.com/some/path",
+			openshiftPublicUrl: "",
+			expectedResult:     "https://somewhere.com/some/path",
+		},
+		{
+			hookUrl:            "https://127.0.0.1:443/some/path",
+			openshiftPublicUrl: "https://127.0.0.1:443",
+			expectedResult:     "https://127.0.0.1:443/some/path",
+		},
+		{
+			hookUrl:            "https://127.0.0.1:443/some/path",
+			openshiftPublicUrl: "https://my.openshift.master:8443",
+			expectedResult:     "https://my.openshift.master:8443/some/path",
+		},
+		{
+			hookUrl:            "https://127.0.0.1:443/some/path",
+			openshiftPublicUrl: "http://my.openshift.master",
+			expectedResult:     "http://my.openshift.master/some/path",
+		},
+	}
+
+	for count, test := range tests {
+		hookUrl, err := url.Parse(test.hookUrl)
+		if err != nil {
+			t.Errorf("Test[%d] Failed: got unexpected error %v", count, err)
+		}
+		result := fixOpenshiftHookUrl(hookUrl, test.openshiftPublicUrl)
+		if result != test.expectedResult {
+			t.Errorf("Test[%d] Failed: Expected '%s' but got '%s'", count, test.expectedResult, result)
+		}
+	}
+}
