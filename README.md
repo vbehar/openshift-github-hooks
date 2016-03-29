@@ -122,7 +122,6 @@ If you want to run it on your laptop:
     ```
     ./openshift-github-hooks sync --github-token="..."
     ```
-  ```
 
   * for the `list` command, you will also need to get your [GitHub Access Token](https://help.github.com/articles/creating-an-access-token-for-command-line-use/), and then run:
 
