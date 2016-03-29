@@ -2,6 +2,7 @@ package main
 
 import (
 	"strconv"
+	"sync"
 
 	"golang.org/x/oauth2"
 
@@ -116,11 +117,7 @@ func (gh *GitHubHooksManager) registerHook(repoOwner string, repoName string, ho
 
 // hasHook checks if the given hook (URL) has already been registered for this repo
 func (gh *GitHubHooksManager) hasHook(repoOwner string, repoName string, hook Hook) (bool, error) {
-	opts := &github.ListOptions{
-		PerPage: 100,
-		Page:    1,
-	}
-	hooks, _, err := gh.client.Repositories.ListHooks(repoOwner, repoName, opts)
+	hooks, err := gh.listHooks(repoOwner, repoName)
 	if err != nil {
 		return false, err
 	}
@@ -138,11 +135,7 @@ func (gh *GitHubHooksManager) hasHook(repoOwner string, repoName string, hook Ho
 func (gh *GitHubHooksManager) deleteHook(repoOwner string, repoName string, hook Hook) (bool, error) {
 	glog.V(2).Infof("Deleting Hook %s on Github repository %s/%s ...", hook.Url, repoOwner, repoName)
 
-	opts := &github.ListOptions{
-		PerPage: 100,
-		Page:    1,
-	}
-	hooks, _, err := gh.client.Repositories.ListHooks(repoOwner, repoName, opts)
+	hooks, err := gh.listHooks(repoOwner, repoName)
 	if err != nil {
 		return false, err
 	}
@@ -161,4 +154,129 @@ func (gh *GitHubHooksManager) deleteHook(repoOwner string, repoName string, hook
 
 	glog.V(2).Infof("Hook %s not found on Github repository %s/%s - nothing to do", hook.Url, repoOwner, repoName)
 	return false, nil
+}
+
+// ListHooksForOrganization returns an array of (repository, webhook) tuples
+// for the given github organization
+func (gh *GitHubHooksManager) ListHooksForOrganization(org string) ([]RepositoryAndHook, error) {
+	glog.V(2).Infof("Listing hooks for organization %s ...", org)
+	repos, err := gh.getOrganizationRepositories(org)
+	if err != nil {
+		return []RepositoryAndHook{}, nil
+	}
+	return gh.listHooksForRepositories(repos)
+}
+
+// ListHooksForRepository returns an array of (repository, webhook) tuples
+// for the given github repository, identified by its owner and name
+func (gh *GitHubHooksManager) ListHooksForRepository(owner string, repo string) ([]RepositoryAndHook, error) {
+	glog.V(2).Infof("Listing hooks for repository %s/%s ...", owner, repo)
+	repository, _, err := gh.client.Repositories.Get(owner, repo)
+	if err != nil {
+		return []RepositoryAndHook{}, nil
+	}
+	return gh.listHooksForRepositories([]github.Repository{*repository})
+}
+
+// listHooksForRepositories returns an array of (repository, webhook) tuples
+// for the given list of github repositories.
+func (gh *GitHubHooksManager) listHooksForRepositories(repositories []github.Repository) ([]RepositoryAndHook, error) {
+	repositoriesAndHooks := []RepositoryAndHook{}
+	wg := &sync.WaitGroup{}
+	c := make(chan RepositoryAndHook)
+	// this "limiter" is used to limit the number of parallel requests to github
+	limiter := make(chan struct{}, 10)
+
+	// single goroutine that writes results to the repositoriesAndHooks array
+	go func(c <-chan RepositoryAndHook) {
+		for {
+			repositoryAndHook, open := <-c
+			if !open {
+				break
+			}
+			repositoriesAndHooks = append(repositoriesAndHooks, repositoryAndHook)
+		}
+	}(c)
+
+	// fetch the hooks in parallel, but restricted by the limiter
+	for r := range repositories {
+		limiter <- struct{}{}
+		wg.Add(1)
+		go func(c chan<- RepositoryAndHook, repository github.Repository) {
+			defer wg.Done()
+			defer func() {
+				<-limiter
+			}()
+			hooks, err := gh.listHooks(*repository.Owner.Login, *repository.Name)
+			if err != nil {
+				glog.Errorf("Failed to list hooks for repository %s: %v", *repository.FullName, err)
+				return
+			}
+			for h := range hooks {
+				c <- RepositoryAndHook{
+					Repository: &repository,
+					Hook:       &hooks[h],
+				}
+			}
+		}(c, repositories[r])
+	}
+
+	wg.Wait()
+	return repositoriesAndHooks, nil
+}
+
+// listHooks lists the hooks from the github api for the given repository
+func (gh *GitHubHooksManager) listHooks(repoOwner, repoName string) (hooks []github.Hook, err error) {
+	glog.V(3).Infof("Listing hooks for repository %s/%s ...", repoOwner, repoName)
+	page := 1
+	for {
+		opts := &github.ListOptions{
+			PerPage: 100,
+			Page:    page,
+		}
+		objs, resp, err := gh.client.Repositories.ListHooks(repoOwner, repoName, opts)
+		if err != nil {
+			return hooks, err
+		}
+		hooks = append(hooks, objs...)
+		page = resp.NextPage
+		if resp.NextPage == 0 {
+			break
+		}
+	}
+
+	glog.V(3).Infof("Found %d hooks for repository %s/%s", len(hooks), repoOwner, repoName)
+	return hooks, nil
+}
+
+// getOrganizationRepositories returns the repositories for the given github organization
+func (gh *GitHubHooksManager) getOrganizationRepositories(org string) (repositories []github.Repository, err error) {
+	glog.V(3).Infof("Listing repositories for organization %s ...", org)
+	page := 1
+	for {
+		opts := &github.RepositoryListByOrgOptions{
+			Type: "all",
+			ListOptions: github.ListOptions{
+				PerPage: 100,
+				Page:    page,
+			},
+		}
+		repos, resp, err := gh.client.Repositories.ListByOrg(org, opts)
+		if err != nil {
+			return repositories, err
+		}
+		repositories = append(repositories, repos...)
+		page = resp.NextPage
+		if resp.NextPage == 0 {
+			break
+		}
+	}
+
+	glog.V(3).Infof("Found %d repositories for organization %s", len(repositories), org)
+	return repositories, nil
+}
+
+type RepositoryAndHook struct {
+	Repository *github.Repository
+	Hook       *github.Hook
 }

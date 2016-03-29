@@ -12,11 +12,15 @@ Its main feature is to keep your GitHub Webhooks in sync with your OpenShift Bui
 
 It is very useful when you host your source code on a GitHub organization: instead of having to manually create your webhooks on GitHub when you create a new build on OpenShift (and then forget to delete it when you remove the build on OpenShift), you just need to run this application (on OpenShift), and let it handle all that boring stuff for you!
 
+There are also additional commands, for example to list all the Hooks of a GitHub organization that references your OpenShift instance.
+
 ## How It Works
 
-This application can be deployed on OpenShift (or anywhere else, but I guess you will want to run it in your OpenShift cluster), and should run with a [ServiceAccount](https://docs.openshift.org/latest/architecture/core_concepts/projects_and_users.html#users) that has the `cluster-reader` [role](https://docs.openshift.org/latest/architecture/additional_concepts/authorization.html#roles), so that it can watch all the [BuildConfigs](https://docs.openshift.org/latest/dev_guide/builds.html#defining-a-buildconfig).
+This application can be deployed on OpenShift or anywhere else, but I guess you will want to run it in your OpenShift cluster - at least for the `sync` command that runs as a daemon. It should run with a [ServiceAccount](https://docs.openshift.org/latest/architecture/core_concepts/projects_and_users.html#users) that has the `cluster-reader` [role](https://docs.openshift.org/latest/architecture/additional_concepts/authorization.html#roles), so that it can watch all the [BuildConfigs](https://docs.openshift.org/latest/dev_guide/builds.html#defining-a-buildconfig).
 
-So this application will listen for every BuildConfig change in the cluster, and for all BuildConfig with a [GitHub Webhook trigger](https://docs.openshift.org/latest/dev_guide/builds.html#webhook-triggers), it will try to [create the hook on the GitHub repository](https://developer.github.com/v3/repos/hooks/#create-a-hook), using the [GitHub API](https://developer.github.com/v3/).
+The `sync` command will listen for every BuildConfig change in the cluster, and for all BuildConfig with a [GitHub Webhook trigger](https://docs.openshift.org/latest/dev_guide/builds.html#webhook-triggers), it will try to [create the hook on the GitHub repository](https://developer.github.com/v3/repos/hooks/#create-a-hook), using the [GitHub API](https://developer.github.com/v3/).
+
+Other commands, such as the `list` command, will just use the GitHub API to list webhooks and print them in the standard output.
 
 It uses a [GitHub Access Token](https://help.github.com/articles/creating-an-access-token-for-command-line-use/) to talk to the GitHub API. You can create such a token in your [GitHub Tokens Settings](https://github.com/settings/tokens) page. It requires the `admin:repo_hook` scope, to be able to create, read and delete hooks.
 
@@ -40,9 +44,17 @@ With this annotation (and its value set to `true`), no GitHub Webhook will be cr
 * If you change the trigger secret in the BuildConfig, a new Webhook will be created on GitHub, but the old one won't be deleted
 * If you delete the trigger from the BuildConfig, the Webhook won't be deleted from GitHub (it will only be deleted if the BC is deleted)
 
-## Running on OpenShift
+## Usage
 
-If you want to deploy this application on an OpenShift cluster, you need to:
+This application has many commands, you can list them by running it:
+
+```
+openshift-github-hooks -h
+```
+
+### Running on OpenShift
+
+If you want to deploy this application on an OpenShift cluster to run the `sync` command, you need to:
 
 * create a project named `github-hooks-sync`:
 
@@ -75,7 +87,7 @@ You can use either of the following templates:
 * [openshift-template-deploy-only.yml](openshift-template-deploy-only.yml) to just deploy from an existing Docker image - by default [vbehar/openshift-github-hooks](https://hub.docker.com/r/vbehar/openshift-github-hooks/)
 * [openshift-template-full.yml](openshift-template-full.yml) to build from sources (by default the [vbehar/openshift-github-hooks](https://github.com/vbehar/openshift-github-hooks) github repository) and then deploy
 
-## Running locally
+### Running locally
 
 If you want to run it on your laptop:
 
@@ -109,6 +121,13 @@ If you want to run it on your laptop:
 
     ```
     ./openshift-github-hooks sync --github-token="..."
+    ```
+  ```
+
+  * for the `list` command, you will also need to get your [GitHub Access Token](https://help.github.com/articles/creating-an-access-token-for-command-line-use/), and then run:
+
+    ```
+    ./openshift-github-hooks list --github-token="..." --organization="..."
     ```
 
 * enjoy!
