@@ -1,6 +1,8 @@
 package scaler
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	kapi "k8s.io/kubernetes/pkg/api"
@@ -63,10 +65,13 @@ func (scaler *DeploymentConfigScaler) ScaleSimple(namespace, name string, precon
 	if err != nil {
 		return err
 	}
+	if dc.Spec.Test {
+		fmt.Fprintln(os.Stderr, "Replica size for a test deployment applies only when the deployment is running.")
+	}
 	scale := deployapi.ScaleFromConfig(dc)
 	scale.Spec.Replicas = int(newSize)
 	if _, err := scaler.dcClient.DeploymentConfigs(namespace).UpdateScale(scale); err != nil {
-		return kubectl.ControllerScaleError{FailureType: kubectl.ControllerScaleUpdateFailure, ResourceVersion: dc.ResourceVersion, ActualError: err}
+		return kubectl.ScaleError{FailureType: kubectl.ScaleUpdateFailure, ResourceVersion: dc.ResourceVersion, ActualError: err}
 	}
 	return nil
 }

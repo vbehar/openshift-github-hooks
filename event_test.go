@@ -10,8 +10,6 @@ import (
 	"github.com/openshift/origin/pkg/client"
 
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -31,7 +29,7 @@ type fakeBuildConfigInterface struct {
 	err       error
 }
 
-func (f fakeBuildConfigInterface) List(label labels.Selector, field fields.Selector) (*buildapi.BuildConfigList, error) {
+func (f fakeBuildConfigInterface) List(options kapi.ListOptions) (*buildapi.BuildConfigList, error) {
 	return nil, nil
 }
 func (f fakeBuildConfigInterface) Get(name string) (*buildapi.BuildConfig, error) {
@@ -46,7 +44,7 @@ func (f fakeBuildConfigInterface) Update(config *buildapi.BuildConfig) (*buildap
 func (f fakeBuildConfigInterface) Delete(name string) error {
 	return nil
 }
-func (f fakeBuildConfigInterface) Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
+func (f fakeBuildConfigInterface) Watch(options kapi.ListOptions) (watch.Interface, error) {
 	return nil, nil
 }
 func (f fakeBuildConfigInterface) Instantiate(request *buildapi.BuildRequest) (result *buildapi.Build, err error) {

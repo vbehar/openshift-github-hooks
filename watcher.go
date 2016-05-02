@@ -8,7 +8,6 @@ import (
 	buildapi "github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
 
-	"k8s.io/kubernetes/pkg/kubectl/resource"
 	"k8s.io/kubernetes/pkg/watch"
 
 	"github.com/golang/glog"
@@ -122,10 +121,7 @@ func (watcher *BuildConfigsWatcher) shouldAcceptEvent(event watch.Event) bool {
 
 // internalWatcher creates a k8s watcher for all buildconfigs (or an error)
 func (watcher *BuildConfigsWatcher) internalWatcher() (watch.Interface, error) {
-	mapper, typer := watcher.factory.Object()
-	clientMapper := watcher.factory.ClientMapperForCommand()
-
-	builder := resource.NewBuilder(mapper, typer, clientMapper).
+	builder := watcher.factory.NewBuilder().
 		AllNamespaces(true).
 		ResourceTypeOrNameArgs(true, "buildconfig").
 		SingleResourceType().

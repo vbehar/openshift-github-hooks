@@ -3,10 +3,12 @@ package client
 import (
 	"fmt"
 
-	"github.com/openshift/origin/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/apis/extensions"
+	unversioned_extensions "k8s.io/kubernetes/pkg/client/typed/generated/extensions/unversioned"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+
+	"github.com/openshift/origin/pkg/api/latest"
 )
 
 type delegatingScaleInterface struct {
@@ -19,14 +21,14 @@ type delegatingScaleNamespacer struct {
 	scaleNS kclient.ScaleNamespacer
 }
 
-func (c *delegatingScaleNamespacer) Scales(namespace string) kclient.ScaleInterface {
+func (c *delegatingScaleNamespacer) Scales(namespace string) unversioned_extensions.ScaleInterface {
 	return &delegatingScaleInterface{
 		dcs:    c.dcNS.DeploymentConfigs(namespace),
 		scales: c.scaleNS.Scales(namespace),
 	}
 }
 
-func NewDelegatingScaleNamespacer(dcNamespacer DeploymentConfigsNamespacer, sNamespacer kclient.ScaleNamespacer) kclient.ScaleNamespacer {
+func NewDelegatingScaleNamespacer(dcNamespacer DeploymentConfigsNamespacer, sNamespacer kclient.ScaleNamespacer) unversioned_extensions.ScalesGetter {
 	return &delegatingScaleNamespacer{
 		dcNS:    dcNamespacer,
 		scaleNS: sNamespacer,
@@ -38,7 +40,8 @@ func (c *delegatingScaleInterface) Get(kind string, name string) (result *extens
 	switch {
 	case kind == "DeploymentConfig":
 		return c.dcs.GetScale(name)
-	case latest.OriginKind(kind, ""):
+	// TODO: This is borked because the interface for Get is broken. Kind is insufficient.
+	case latest.IsKindInAnyOriginGroup(kind):
 		return nil, errors.NewBadRequest(fmt.Sprintf("Kind %s has no Scale subresource", kind))
 	default:
 		return c.scales.Get(kind, name)
@@ -51,7 +54,8 @@ func (c *delegatingScaleInterface) Update(kind string, scale *extensions.Scale) 
 	switch {
 	case kind == "DeploymentConfig":
 		return c.dcs.UpdateScale(scale)
-	case latest.OriginKind(kind, ""):
+	// TODO: This is borked because the interface for Update is broken. Kind is insufficient.
+	case latest.IsKindInAnyOriginGroup(kind):
 		return nil, errors.NewBadRequest(fmt.Sprintf("Kind %s has no Scale subresource", kind))
 	default:
 		return c.scales.Update(kind, scale)

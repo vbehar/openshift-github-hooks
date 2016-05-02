@@ -2,11 +2,12 @@ package generator
 
 import (
 	"fmt"
+	"strconv"
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/kubectl"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/intstr"
 
 	"github.com/openshift/origin/pkg/route/api"
 )
@@ -25,6 +26,7 @@ func (RouteGenerator) ParamNames() []kubectl.GeneratorParam {
 		{"target-port", false},
 		{"name", false},
 		{"hostname", false},
+		{"path", false},
 	}
 }
 
@@ -67,6 +69,7 @@ func (RouteGenerator) Generate(genericParams map[string]interface{}) (runtime.Ob
 		},
 		Spec: api.RouteSpec{
 			Host: params["hostname"],
+			Path: params["path"],
 			To: kapi.ObjectReference{
 				Name: params["default-name"],
 			},
@@ -75,8 +78,14 @@ func (RouteGenerator) Generate(genericParams map[string]interface{}) (runtime.Ob
 
 	portString := params["target-port"]
 	if len(portString) > 0 {
+		var targetPort intstr.IntOrString
+		if port, err := strconv.Atoi(portString); err == nil {
+			targetPort = intstr.FromInt(port)
+		} else {
+			targetPort = intstr.FromString(portString)
+		}
 		route.Spec.Port = &api.RoutePort{
-			TargetPort: util.NewIntOrStringFromString(portString),
+			TargetPort: targetPort,
 		}
 	}
 

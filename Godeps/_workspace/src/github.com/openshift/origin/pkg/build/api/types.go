@@ -21,6 +21,15 @@ const (
 	BuildLabel = "openshift.io/build.name"
 	// DefaultDockerLabelNamespace is the key of a Build label, whose values are build metadata.
 	DefaultDockerLabelNamespace = "io.openshift."
+	// OriginVersion is an environment variable key that indicates the version of origin that
+	// created this build definition.
+	OriginVersion = "ORIGIN_VERSION"
+	// AllowedUIDs is an environment variable that contains ranges of UIDs that are allowed in
+	// Source builder images
+	AllowedUIDs = "ALLOWED_UIDS"
+	// DropCapabilities is an environment variable that contains a list of capabilities to drop when
+	// executing a Source build
+	DropCapabilities = "DROP_CAPS"
 )
 
 // Build encapsulates the inputs needed to produce a new deployable image, as well as
@@ -58,6 +67,10 @@ type BuildSpec struct {
 
 	// Compute resource requirements to execute the build
 	Resources kapi.ResourceRequirements
+
+	// PostCommit is a build hook executed after the build output image is
+	// committed, before it is pushed to a registry.
+	PostCommit BuildPostCommitSpec
 
 	// Optional duration in seconds, counted from the time when a build pod gets
 	// scheduled in the system, that the build may be active on a node before the
@@ -295,10 +308,10 @@ type GitBuildSource struct {
 	Ref string
 
 	// HTTPProxy is a proxy used to reach the git repository over http
-	HTTPProxy string
+	HTTPProxy *string
 
 	// HTTPSProxy is a proxy used to reach the git repository over https
-	HTTPSProxy string
+	HTTPSProxy *string
 }
 
 // SourceControlUser defines the identity of a user of source control
@@ -356,6 +369,9 @@ type CustomBuildStrategy struct {
 
 	// Secrets is a list of additional secrets that will be included in the custom build pod
 	Secrets []SecretSpec
+
+	// BuildAPIVersion is the requested API version for the Build object serialized and passed to the custom builder
+	BuildAPIVersion string
 }
 
 // DockerBuildStrategy defines input parameters specific to Docker build.
@@ -407,6 +423,94 @@ type SourceBuildStrategy struct {
 
 	// ForcePull describes if the builder should pull the images from registry prior to building.
 	ForcePull bool
+}
+
+// A BuildPostCommitSpec holds a build post commit hook specification. The hook
+// executes a command in a temporary container running the build output image,
+// immediately after the last layer of the image is committed and before the
+// image is pushed to a registry. The command is executed with the current
+// working directory ($PWD) set to the image's WORKDIR.
+//
+// The build will be marked as failed if the hook execution fails. It will fail
+// if the script or command return a non-zero exit code, or if there is any
+// other error related to starting the temporary container.
+//
+// There are five different ways to configure the hook. As an example, all forms
+// below are equivalent and will execute `rake test --verbose`.
+//
+// 1. Shell script:
+//
+// 	BuildPostCommitSpec{
+// 		Script: "rake test --verbose",
+// 	}
+//
+// The above is a convenient form which is equivalent to:
+//
+// 	BuildPostCommitSpec{
+// 		Command: []string{"/bin/sh", "-ic"},
+// 		Args: []string{"rake test --verbose"},
+// 	}
+//
+// 2. Command as the image entrypoint:
+//
+// 	BuildPostCommitSpec{
+// 		Command: []string{"rake", "test", "--verbose"},
+// 	}
+//
+// Command overrides the image entrypoint in the exec form, as documented in
+// Docker: https://docs.docker.com/engine/reference/builder/#entrypoint.
+//
+// 3. Pass arguments to the default entrypoint:
+//
+// 	BuildPostCommitSpec{
+// 		Args: []string{"rake", "test", "--verbose"},
+// 	}
+//
+// This form is only useful if the image entrypoint can handle arguments.
+//
+// 4. Shell script with arguments:
+//
+// 	BuildPostCommitSpec{
+// 		Script: "rake test $1",
+// 		Args: []string{"--verbose"},
+// 	}
+//
+// This form is useful if you need to pass arguments that would otherwise be
+// hard to quote properly in the shell script. In the script, $0 will be
+// "/bin/sh" and $1, $2, etc, are the positional arguments from Args.
+//
+// 5. Command with arguments:
+//
+// 	BuildPostCommitSpec{
+// 		Command: []string{"rake", "test"},
+// 		Args: []string{"--verbose"},
+// 	}
+//
+// This form is equivalent to appending the arguments to the Command slice.
+//
+// It is invalid to provide both Script and Command simultaneously. If none of
+// the fields are specified, the hook is not executed.
+type BuildPostCommitSpec struct {
+	// Command is the command to run. It may not be specified with Script.
+	// This might be needed if the image doesn't have `/bin/sh`, or if you
+	// do not want to use a shell. In all other cases, using Script might be
+	// more convenient.
+	Command []string
+	// Args is a list of arguments that are provided to either Command,
+	// Script or the Docker image's default entrypoint. The arguments are
+	// placed immediately after the command to be run.
+	Args []string
+	// Script is a shell script to be run with `/bin/sh -ic`. It may not be
+	// specified with Command. Use Script when a shell script is appropriate
+	// to execute the post build hook, for example for running unit tests
+	// with `rake test`. If you need control over the image entrypoint, or
+	// if the image does not have `/bin/sh`, use Command and/or Args.
+	// The `-i` flag is needed to support CentOS and RHEL images that use
+	// Software Collections (SCL), in order to have the appropriate
+	// collections enabled in the shell. E.g., in the Ruby image, this is
+	// necessary to make `ruby`, `bundle` and other binaries available in
+	// the PATH.
+	Script string
 }
 
 // BuildOutput is input to a build strategy and describes the Docker image that the strategy
@@ -641,7 +745,7 @@ type BuildLogOptions struct {
 	// Follow if true indicates that the build log should be streamed until
 	// the build terminates.
 	Follow bool
-	// If true, return previous terminated container logs
+	// If true, return previous build logs.
 	Previous bool
 	// A relative time in seconds before the current time from which to show logs. If this value
 	// precedes the time a pod was started, only logs since the pod start will be returned.

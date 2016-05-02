@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"reflect"
 
-	deployapi "github.com/openshift/origin/pkg/deploy/api"
-
 	kmeta "k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+
+	deployapi "github.com/openshift/origin/pkg/deploy/api"
 )
 
 // MergeInto flags
@@ -18,13 +17,6 @@ const (
 	ErrorOnExistingDstKey
 	ErrorOnDifferentDstKeyValue
 )
-
-// ReportError reports the single item validation error and properly set the
-// prefix and index to match the Config item JSON index
-func ReportError(allErrs *fielderrors.ValidationErrorList, index int, err fielderrors.ValidationError) {
-	i := fielderrors.ValidationErrorList{}
-	*allErrs = append(*allErrs, append(i, &err).PrefixIndex(index).Prefix("item")...)
-}
 
 // AddObjectLabels adds new label(s) to a single runtime.Object
 func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
@@ -40,7 +32,7 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 			return err
 		}
 	} else {
-		metaLabels := accessor.Labels()
+		metaLabels := accessor.GetLabels()
 		if metaLabels == nil {
 			metaLabels = make(map[string]string)
 		}
@@ -48,12 +40,12 @@ func AddObjectLabels(obj runtime.Object, labels labels.Set) error {
 		switch objType := obj.(type) {
 		case *deployapi.DeploymentConfig:
 			if err := addDeploymentConfigNestedLabels(objType, labels); err != nil {
-				return fmt.Errorf("unable to add nested labels to %s/%s: %v", accessor.Kind(), accessor.Name(), err)
+				return fmt.Errorf("unable to add nested labels to %s/%s: %v", obj.GetObjectKind().GroupVersionKind(), accessor.GetName(), err)
 			}
 		}
 
 		if err := MergeInto(metaLabels, labels, ErrorOnDifferentDstKeyValue); err != nil {
-			return fmt.Errorf("unable to add labels to %s/%s: %v", accessor.Kind(), accessor.Name(), err)
+			return fmt.Errorf("unable to add labels to %s/%s: %v", obj.GetObjectKind().GroupVersionKind(), accessor.GetName(), err)
 		}
 		accessor.SetLabels(metaLabels)
 
@@ -115,7 +107,7 @@ func AddObjectAnnotations(obj runtime.Object, annotations map[string]string) err
 			return err
 		}
 	} else {
-		metaAnnotations := accessor.Annotations()
+		metaAnnotations := accessor.GetAnnotations()
 		if metaAnnotations == nil {
 			metaAnnotations = make(map[string]string)
 		}
@@ -123,7 +115,7 @@ func AddObjectAnnotations(obj runtime.Object, annotations map[string]string) err
 		switch objType := obj.(type) {
 		case *deployapi.DeploymentConfig:
 			if err := addDeploymentConfigNestedAnnotations(objType, annotations); err != nil {
-				return fmt.Errorf("unable to add nested annotations to %s/%s: %v", accessor.Kind(), accessor.Name(), err)
+				return fmt.Errorf("unable to add nested annotations to %s/%s: %v", obj.GetObjectKind().GroupVersionKind(), accessor.GetName(), err)
 			}
 		}
 

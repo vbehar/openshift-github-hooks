@@ -9,9 +9,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/vbehar/openshift-github-hooks/pkg/openshift"
+
 	"github.com/emicklei/go-restful/swagger"
 	"github.com/golang/glog"
-	"github.com/spf13/pflag"
 )
 
 // defaultOpenshiftPublicUrl returns the openshift public URL as defined
@@ -20,7 +21,7 @@ import (
 // If it can't be retrieved, it will either return an empty string,
 // or the host of the server as defined by the client config.
 func defaultOpenshiftPublicUrl() string {
-	factory := getFactory(pflag.NewFlagSet("", pflag.ExitOnError))
+	factory := openshift.Factory
 	config, err := factory.OpenShiftClientConfig.ClientConfig()
 	if err != nil {
 		glog.Warningf("Failed to get Openshift Config: %v", err)

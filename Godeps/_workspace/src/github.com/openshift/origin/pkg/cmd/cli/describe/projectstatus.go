@@ -12,8 +12,6 @@ import (
 	kapierrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/sets"
 
@@ -52,6 +50,10 @@ type ProjectStatusDescriber struct {
 	C       client.Interface
 	Server  string
 	Suggest bool
+
+	LogsCommandName             string
+	SecurityPolicyCommandFormat string
+	SetProbeCommandName         string
 }
 
 func (d *ProjectStatusDescriber) MakeGraph(namespace string) (osgraph.Graph, sets.String, error) {
@@ -110,6 +112,7 @@ func (d *ProjectStatusDescriber) MakeGraph(namespace string) (osgraph.Graph, set
 	deployedges.AddAllTriggerEdges(g)
 	deployedges.AddAllDeploymentEdges(g)
 	imageedges.AddAllImageStreamRefEdges(g)
+	imageedges.AddAllImageStreamImageRefEdges(g)
 	routeedges.AddAllRouteEdges(g)
 
 	return g, forbiddenResources, nil
@@ -163,8 +166,14 @@ func (d *ProjectStatusDescriber) Describe(namespace, name string) (string, error
 			}
 			local := namespacedFormatter{currentNamespace: service.Service.Namespace}
 
+			var exposes []string
+			for _, routeNode := range service.ExposingRoutes {
+				exposes = append(exposes, describeRouteInServiceGroup(local, routeNode)...)
+			}
+			sort.Sort(exposedRoutes(exposes))
+
 			fmt.Fprintln(out)
-			printLines(out, indent, 0, describeServiceInServiceGroup(f, service)...)
+			printLines(out, "", 0, describeServiceInServiceGroup(f, service, exposes...)...)
 
 			for _, dcPipeline := range service.DeploymentConfigPipelines {
 				printLines(out, indent, 1, describeDeploymentInServiceGroup(local, dcPipeline)...)
@@ -190,10 +199,6 @@ func (d *ProjectStatusDescriber) Describe(namespace, name string) (string, error
 				}
 				printLines(out, indent, 1, describePodInServiceGroup(local, podNode)...)
 			}
-
-			for _, routeNode := range service.ExposingRoutes {
-				printLines(out, indent, 1, describeRouteInServiceGroup(local, routeNode)...)
-			}
 		}
 
 		for _, standaloneDC := range standaloneDCs {
@@ -215,9 +220,12 @@ func (d *ProjectStatusDescriber) Describe(namespace, name string) (string, error
 
 		allMarkers := osgraph.Markers{}
 		allMarkers = append(allMarkers, createForbiddenMarkers(forbiddenResources)...)
-		for _, scanner := range getMarkerScanners() {
+		for _, scanner := range getMarkerScanners(d.LogsCommandName, d.SecurityPolicyCommandFormat, d.SetProbeCommandName) {
 			allMarkers = append(allMarkers, scanner(g, f)...)
 		}
+
+		// TODO: Provide an option to chase these hidden markers.
+		allMarkers = allMarkers.FilterByNamespace(namespace)
 
 		fmt.Fprintln(out)
 
@@ -233,7 +241,15 @@ func (d *ProjectStatusDescriber) Describe(namespace, name string) (string, error
 				if len(marker.Suggestion) > 0 {
 					errorSuggestions++
 					if d.Suggest {
-						fmt.Fprintln(out, indent+"  "+marker.Suggestion.String())
+						switch s := marker.Suggestion.String(); {
+						case strings.Contains(s, "\n"):
+							fmt.Fprintln(out)
+							for _, line := range strings.Split(s, "\n") {
+								fmt.Fprintln(out, indent+"  "+line)
+							}
+						case len(s) > 0:
+							fmt.Fprintln(out, indent+"  try: "+s)
+						}
 					}
 				}
 			}
@@ -247,8 +263,14 @@ func (d *ProjectStatusDescriber) Describe(namespace, name string) (string, error
 			for _, marker := range warningMarkers {
 				if d.Suggest {
 					fmt.Fprintln(out, indent+"* "+marker.Message)
-					if len(marker.Suggestion) > 0 {
-						fmt.Fprintln(out, indent+"  "+marker.Suggestion.String())
+					switch s := marker.Suggestion.String(); {
+					case strings.Contains(s, "\n"):
+						fmt.Fprintln(out)
+						for _, line := range strings.Split(s, "\n") {
+							fmt.Fprintln(out, indent+"  "+line)
+						}
+					case len(s) > 0:
+						fmt.Fprintln(out, indent+"  try: "+s)
 					}
 				}
 			}
@@ -306,18 +328,25 @@ func createForbiddenMarkers(forbiddenResources sets.String) []osgraph.Marker {
 	return markers
 }
 
-func getMarkerScanners() []osgraph.MarkerScanner {
+func getMarkerScanners(logsCommandName, securityPolicyCommandFormat, setProbeCommandName string) []osgraph.MarkerScanner {
 	return []osgraph.MarkerScanner{
-		kubeanalysis.FindRestartingPods,
+		func(g osgraph.Graph, f osgraph.Namer) []osgraph.Marker {
+			return kubeanalysis.FindRestartingPods(g, f, logsCommandName, securityPolicyCommandFormat)
+		},
 		kubeanalysis.FindDuelingReplicationControllers,
 		kubeanalysis.FindMissingSecrets,
 		buildanalysis.FindUnpushableBuildConfigs,
 		buildanalysis.FindCircularBuilds,
 		buildanalysis.FindPendingTags,
 		deployanalysis.FindDeploymentConfigTriggerErrors,
-		routeanalysis.FindMissingPortMapping,
+		buildanalysis.FindMissingInputImageStreams,
+		func(g osgraph.Graph, f osgraph.Namer) []osgraph.Marker {
+			return deployanalysis.FindDeploymentConfigReadinessWarnings(g, f, setProbeCommandName)
+		},
+		routeanalysis.FindPortMappingIssues,
 		routeanalysis.FindMissingTLSTerminationType,
 		routeanalysis.FindPathBasedPassthroughRoutes,
+		routeanalysis.FindRouteAdmissionFailures,
 		// We disable this feature by default and we don't have a capability detection for this sort of thing.  Disable this check for now.
 		// kubeanalysis.FindUnmountableSecrets,
 	}
@@ -418,7 +447,11 @@ func describeDeploymentInServiceGroup(f formatter, deploy graphview.DeploymentCo
 
 	includeLastPass := deploy.ActiveDeployment == nil
 	if len(deploy.Images) == 1 {
-		lines := []string{fmt.Sprintf("%s deploys %s %s", f.ResourceName(deploy.Deployment), describeImageInPipeline(local, deploy.Images[0], deploy.Deployment.Namespace), describeDeploymentConfigTrigger(deploy.Deployment.DeploymentConfig))}
+		format := "%s deploys %s %s"
+		if deploy.Deployment.Spec.Test {
+			format = "%s test deploys %s %s"
+		}
+		lines := []string{fmt.Sprintf(format, f.ResourceName(deploy.Deployment), describeImageInPipeline(local, deploy.Images[0], deploy.Deployment.Namespace), describeDeploymentConfigTrigger(deploy.Deployment.DeploymentConfig))}
 		if len(lines[0]) > 120 && strings.Contains(lines[0], " <- ") {
 			segments := strings.SplitN(lines[0], " <- ", 2)
 			lines[0] = segments[0] + " <-"
@@ -429,7 +462,11 @@ func describeDeploymentInServiceGroup(f formatter, deploy graphview.DeploymentCo
 		return lines
 	}
 
-	lines := []string{fmt.Sprintf("%s deploys: %s", f.ResourceName(deploy.Deployment), describeDeploymentConfigTrigger(deploy.Deployment.DeploymentConfig))}
+	format := "%s deploys %s"
+	if deploy.Deployment.Spec.Test {
+		format = "%s test deploys %s"
+	}
+	lines := []string{fmt.Sprintf(format, f.ResourceName(deploy.Deployment), describeDeploymentConfigTrigger(deploy.Deployment.DeploymentConfig))}
 	for _, image := range deploy.Images {
 		lines = append(lines, describeImageInPipeline(local, image, deploy.Deployment.Namespace))
 		lines = append(lines, indentLines("  ", describeAdditionalBuildDetail(image.Build, image.LastSuccessfulBuild, image.LastUnsuccessfulBuild, image.ActiveBuilds, image.DestinationResolved, includeLastPass)...)...)
@@ -464,11 +501,133 @@ func describePodInServiceGroup(f formatter, podNode *kubegraph.PodNode) []string
 	return lines
 }
 
-func describeRouteInServiceGroup(f formatter, routeNode *routegraph.RouteNode) []string {
-	if routeNode.Spec.Port != nil && len(routeNode.Spec.Port.TargetPort.String()) > 0 {
-		return []string{fmt.Sprintf("exposed by %s on pod port %s", f.ResourceName(routeNode), routeNode.Spec.Port.TargetPort.String())}
+// exposedRoutes orders strings by their leading prefix (https:// -> http:// other prefixes), then by
+// the shortest distance up to the first space (indicating a break), then alphabetically:
+//
+//   https://test.com
+//   https://www.test.com
+//   http://t.com
+//   other string
+//
+type exposedRoutes []string
+
+func (e exposedRoutes) Len() int      { return len(e) }
+func (e exposedRoutes) Swap(i, j int) { e[i], e[j] = e[j], e[i] }
+func (e exposedRoutes) Less(i, j int) bool {
+	a, b := e[i], e[j]
+	prefixA, prefixB := strings.HasPrefix(a, "https://"), strings.HasPrefix(b, "https://")
+	switch {
+	case prefixA && !prefixB:
+		return true
+	case !prefixA && prefixB:
+		return false
+	case !prefixA && !prefixB:
+		prefixA, prefixB = strings.HasPrefix(a, "http://"), strings.HasPrefix(b, "http://")
+		switch {
+		case prefixA && !prefixB:
+			return true
+		case !prefixA && prefixB:
+			return false
+		case !prefixA && !prefixB:
+			return a < b
+		default:
+			a, b = a[7:], b[7:]
+		}
+	default:
+		a, b = a[8:], b[8:]
 	}
-	return []string{fmt.Sprintf("exposed by %s", f.ResourceName(routeNode))}
+	lA, lB := strings.Index(a, " "), strings.Index(b, " ")
+	if lA == -1 {
+		lA = len(a)
+	}
+	if lB == -1 {
+		lB = len(b)
+	}
+	switch {
+	case lA < lB:
+		return true
+	case lA > lB:
+		return false
+	default:
+		return a < b
+	}
+}
+
+func extractRouteInfo(route *routeapi.Route) (requested bool, other []string, errors []string) {
+	reasons := sets.NewString()
+	for _, ingress := range route.Status.Ingress {
+		exact := route.Spec.Host == ingress.Host
+		switch status, condition := routeapi.IngressConditionStatus(&ingress, routeapi.RouteAdmitted); status {
+		case kapi.ConditionFalse:
+			reasons.Insert(condition.Reason)
+		default:
+			if exact {
+				requested = true
+			} else {
+				other = append(other, ingress.Host)
+			}
+		}
+	}
+	return requested, other, reasons.List()
+}
+
+func describeRouteExposed(host string, route *routeapi.Route, errors bool) string {
+	var trailer string
+	if errors {
+		trailer = " (!)"
+	}
+	var prefix string
+	switch {
+	case route.Spec.TLS == nil:
+		prefix = fmt.Sprintf("http://%s", host)
+	case route.Spec.TLS.Termination == routeapi.TLSTerminationPassthrough:
+		prefix = fmt.Sprintf("https://%s (passthrough)", host)
+	case route.Spec.TLS.Termination == routeapi.TLSTerminationReencrypt:
+		prefix = fmt.Sprintf("https://%s (reencrypt)", host)
+	case route.Spec.TLS.Termination != routeapi.TLSTerminationEdge:
+		// future proof against other types of TLS termination being added
+		prefix = fmt.Sprintf("https://%s", host)
+	case route.Spec.TLS.InsecureEdgeTerminationPolicy == routeapi.InsecureEdgeTerminationPolicyRedirect:
+		prefix = fmt.Sprintf("https://%s (redirects)", host)
+	case route.Spec.TLS.InsecureEdgeTerminationPolicy == routeapi.InsecureEdgeTerminationPolicyAllow:
+		prefix = fmt.Sprintf("https://%s (and http)", host)
+	default:
+		prefix = fmt.Sprintf("https://%s", host)
+	}
+
+	if route.Spec.Port != nil && len(route.Spec.Port.TargetPort.String()) > 0 {
+		return fmt.Sprintf("%s to pod port %s%s", prefix, route.Spec.Port.TargetPort.String(), trailer)
+	}
+	return fmt.Sprintf("%s%s", prefix, trailer)
+}
+
+func describeRouteInServiceGroup(f formatter, routeNode *routegraph.RouteNode) []string {
+	// markers should cover printing information about admission failure
+	requested, other, errors := extractRouteInfo(routeNode.Route)
+	var lines []string
+	if requested {
+		lines = append(lines, describeRouteExposed(routeNode.Spec.Host, routeNode.Route, len(errors) > 0))
+	}
+	for _, s := range other {
+		lines = append(lines, describeRouteExposed(s, routeNode.Route, len(errors) > 0))
+	}
+	if len(lines) == 0 {
+		switch {
+		case len(errors) >= 1:
+			// router rejected the output
+			lines = append(lines, fmt.Sprintf("%s not accepted: %s", f.ResourceName(routeNode), errors[0]))
+		case len(routeNode.Spec.Host) == 0:
+			// no errors or output, likely no router running and no default domain
+			lines = append(lines, fmt.Sprintf("%s has no host set", f.ResourceName(routeNode)))
+		case len(routeNode.Status.Ingress) == 0:
+			// host set, but no ingress, an older legacy router
+			lines = append(lines, describeRouteExposed(routeNode.Spec.Host, routeNode.Route, false))
+		default:
+			// multiple conditions but no host exposed, use the generic legacy output
+			lines = append(lines, fmt.Sprintf("exposed as %s by %s", routeNode.Spec.Host, f.ResourceName(routeNode)))
+		}
+	}
+	return lines
 }
 
 func describeDeploymentConfigTrigger(dc *deployapi.DeploymentConfig) string {
@@ -617,7 +776,7 @@ func describeBuildPhase(build *buildapi.Build, t *unversioned.Time, parentName s
 		suffix := build.Name[len(prefix):]
 
 		if buildNumber, err := strconv.Atoi(suffix); err == nil {
-			buildIdentification = fmt.Sprintf("#%d build", buildNumber)
+			buildIdentification = fmt.Sprintf("build #%d", buildNumber)
 		}
 	}
 
@@ -707,9 +866,9 @@ func describeDeployments(f formatter, dcNode *deploygraph.DeploymentConfigNode, 
 	if activeDeployment == nil {
 		on, auto := describeDeploymentConfigTriggers(dcNode.DeploymentConfig)
 		if dcNode.DeploymentConfig.Status.LatestVersion == 0 {
-			out = append(out, fmt.Sprintf("#1 deployment waiting %s", on))
+			out = append(out, fmt.Sprintf("deployment #1 waiting %s", on))
 		} else if auto {
-			out = append(out, fmt.Sprintf("#%d deployment pending %s", dcNode.DeploymentConfig.Status.LatestVersion, on))
+			out = append(out, fmt.Sprintf("deployment #%d pending %s", dcNode.DeploymentConfig.Status.LatestVersion, on))
 		}
 		// TODO: detect new image available?
 	} else {
@@ -717,7 +876,7 @@ func describeDeployments(f formatter, dcNode *deploygraph.DeploymentConfigNode, 
 	}
 
 	for i, deployment := range deploymentsToPrint {
-		out = append(out, describeDeploymentStatus(deployment.ReplicationController, i == 0))
+		out = append(out, describeDeploymentStatus(deployment.ReplicationController, i == 0, dcNode.DeploymentConfig.Spec.Test))
 
 		switch {
 		case count == -1:
@@ -733,7 +892,7 @@ func describeDeployments(f formatter, dcNode *deploygraph.DeploymentConfigNode, 
 	return out
 }
 
-func describeDeploymentStatus(deploy *kapi.ReplicationController, first bool) string {
+func describeDeploymentStatus(deploy *kapi.ReplicationController, first, test bool) string {
 	timeAt := strings.ToLower(formatRelativeTime(deploy.CreationTimestamp.Time))
 	status := deployutil.DeploymentStatusFor(deploy)
 	version := deployutil.DeploymentVersionFor(deploy)
@@ -744,14 +903,21 @@ func describeDeploymentStatus(deploy *kapi.ReplicationController, first bool) st
 			reason = fmt.Sprintf(": %s", reason)
 		}
 		// TODO: encode fail time in the rc
-		return fmt.Sprintf("#%d deployment failed %s ago%s%s", version, timeAt, reason, describePodSummaryInline(deploy, false))
+		return fmt.Sprintf("deployment #%d failed %s ago%s%s", version, timeAt, reason, describePodSummaryInline(deploy, false))
 	case deployapi.DeploymentStatusComplete:
 		// TODO: pod status output
-		return fmt.Sprintf("#%d deployed %s ago%s", version, timeAt, describePodSummaryInline(deploy, first))
+		if test {
+			return fmt.Sprintf("test deployment #%d deployed %s ago", version, timeAt)
+		}
+		return fmt.Sprintf("deployment #%d deployed %s ago%s", version, timeAt, describePodSummaryInline(deploy, first))
 	case deployapi.DeploymentStatusRunning:
-		return fmt.Sprintf("#%d deployment running for %s%s", version, timeAt, describePodSummaryInline(deploy, false))
+		format := "deployment #%d running for %s%s"
+		if test {
+			format = "test deployment #%d running for %s%s"
+		}
+		return fmt.Sprintf(format, version, timeAt, describePodSummaryInline(deploy, false))
 	default:
-		return fmt.Sprintf("#%d deployment %s %s ago%s", version, strings.ToLower(string(status)), timeAt, describePodSummaryInline(deploy, false))
+		return fmt.Sprintf("deployment #%d %s %s ago%s", version, strings.ToLower(string(status)), timeAt, describePodSummaryInline(deploy, false))
 	}
 }
 
@@ -816,11 +982,17 @@ func describeDeploymentConfigTriggers(config *deployapi.DeploymentConfig) (strin
 	}
 }
 
-func describeServiceInServiceGroup(f formatter, svc graphview.ServiceGroup) []string {
+func describeServiceInServiceGroup(f formatter, svc graphview.ServiceGroup, exposed ...string) []string {
 	spec := svc.Service.Spec
 	ip := spec.ClusterIP
 	port := describeServicePorts(spec)
 	switch {
+	case len(exposed) > 1:
+		return append([]string{fmt.Sprintf("%s (%s)", exposed[0], f.ResourceName(svc.Service))}, exposed[1:]...)
+	case len(exposed) == 1:
+		return []string{fmt.Sprintf("%s (%s)", exposed[0], f.ResourceName(svc.Service))}
+	case spec.Type == kapi.ServiceTypeNodePort:
+		return []string{fmt.Sprintf("%s (all nodes)%s", f.ResourceName(svc.Service), port)}
 	case ip == "None":
 		return []string{fmt.Sprintf("%s (headless)%s", f.ResourceName(svc.Service), port)}
 	case len(ip) == 0:
@@ -830,28 +1002,41 @@ func describeServiceInServiceGroup(f formatter, svc graphview.ServiceGroup) []st
 	}
 }
 
+func portOrNodePort(spec kapi.ServiceSpec, port kapi.ServicePort) string {
+	switch {
+	case spec.Type != kapi.ServiceTypeNodePort:
+		return strconv.Itoa(port.Port)
+	case port.NodePort == 0:
+		return "<initializing>"
+	default:
+		return strconv.Itoa(port.NodePort)
+	}
+}
+
 func describeServicePorts(spec kapi.ServiceSpec) string {
 	switch len(spec.Ports) {
 	case 0:
 		return " no ports"
 
 	case 1:
-		if spec.Ports[0].TargetPort.String() == "0" || spec.ClusterIP == kapi.ClusterIPNone || spec.Ports[0].Port == spec.Ports[0].TargetPort.IntVal {
-			return fmt.Sprintf(":%d", spec.Ports[0].Port)
+		port := portOrNodePort(spec, spec.Ports[0])
+		if spec.Ports[0].TargetPort.String() == "0" || spec.ClusterIP == kapi.ClusterIPNone || port == spec.Ports[0].TargetPort.String() {
+			return fmt.Sprintf(":%s", port)
 		}
-		return fmt.Sprintf(":%d -> %s", spec.Ports[0].Port, spec.Ports[0].TargetPort.String())
+		return fmt.Sprintf(":%s -> %s", port, spec.Ports[0].TargetPort.String())
 
 	default:
 		pairs := []string{}
 		for _, port := range spec.Ports {
+			externalPort := portOrNodePort(spec, port)
 			if port.TargetPort.String() == "0" || spec.ClusterIP == kapi.ClusterIPNone {
-				pairs = append(pairs, fmt.Sprintf("%d", port.Port))
+				pairs = append(pairs, externalPort)
 				continue
 			}
-			if port.Port == port.TargetPort.IntVal {
+			if port.Port == int(port.TargetPort.IntVal) {
 				pairs = append(pairs, port.TargetPort.String())
 			} else {
-				pairs = append(pairs, fmt.Sprintf("%d->%s", port.Port, port.TargetPort.String()))
+				pairs = append(pairs, fmt.Sprintf("%s->%s", externalPort, port.TargetPort.String()))
 			}
 		}
 		return " ports " + strings.Join(pairs, ", ")
@@ -873,7 +1058,7 @@ type rcLoader struct {
 }
 
 func (l *rcLoader) Load() error {
-	list, err := l.lister.ReplicationControllers(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.ReplicationControllers(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -897,7 +1082,7 @@ type serviceLoader struct {
 }
 
 func (l *serviceLoader) Load() error {
-	list, err := l.lister.Services(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.Services(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -921,7 +1106,7 @@ type podLoader struct {
 }
 
 func (l *podLoader) Load() error {
-	list, err := l.lister.Pods(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.Pods(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -945,7 +1130,7 @@ type serviceAccountLoader struct {
 }
 
 func (l *serviceAccountLoader) Load() error {
-	list, err := l.lister.ServiceAccounts(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.ServiceAccounts(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -969,7 +1154,7 @@ type secretLoader struct {
 }
 
 func (l *secretLoader) Load() error {
-	list, err := l.lister.Secrets(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.Secrets(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -993,7 +1178,7 @@ type isLoader struct {
 }
 
 func (l *isLoader) Load() error {
-	list, err := l.lister.ImageStreams(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.ImageStreams(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -1018,7 +1203,7 @@ type dcLoader struct {
 }
 
 func (l *dcLoader) Load() error {
-	list, err := l.lister.DeploymentConfigs(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.DeploymentConfigs(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -1042,7 +1227,7 @@ type bcLoader struct {
 }
 
 func (l *bcLoader) Load() error {
-	list, err := l.lister.BuildConfigs(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.BuildConfigs(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return errors.TolerateNotFoundError(err)
 	}
@@ -1066,7 +1251,7 @@ type buildLoader struct {
 }
 
 func (l *buildLoader) Load() error {
-	list, err := l.lister.Builds(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.Builds(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return errors.TolerateNotFoundError(err)
 	}
@@ -1090,7 +1275,7 @@ type routeLoader struct {
 }
 
 func (l *routeLoader) Load() error {
-	list, err := l.lister.Routes(l.namespace).List(labels.Everything(), fields.Everything())
+	list, err := l.lister.Routes(l.namespace).List(kapi.ListOptions{})
 	if err != nil {
 		return err
 	}

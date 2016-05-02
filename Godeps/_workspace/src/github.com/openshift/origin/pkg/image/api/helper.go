@@ -14,6 +14,7 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/docker/distribution/digest"
+	"github.com/docker/distribution/manifest/schema1"
 	"github.com/golang/glog"
 )
 
@@ -26,6 +27,10 @@ const (
 	DockerDefaultV1Registry = "index." + DockerDefaultRegistry
 	// DockerDefaultV2Registry is the host name of the default v2 registry
 	DockerDefaultV2Registry = "registry-1." + DockerDefaultRegistry
+
+	// containerImageEntrypointAnnotationFormatKey is a format used to identify the entrypoint of a particular
+	// container in a pod template. It is a JSON array of strings.
+	containerImageEntrypointAnnotationFormatKey = "openshift.io/container.%s.image.entrypoint"
 )
 
 // TODO remove (base, tag, id)
@@ -298,10 +303,37 @@ func NormalizeImageStreamTag(name string) string {
 	return name
 }
 
-// ImageWithMetadata modifies the image to fill in DockerImageMetadata
+// ManifestMatchesImage returns true if the provided manifest matches the name of the image.
+func ManifestMatchesImage(image *Image, newManifest []byte) (bool, error) {
+	dgst, err := digest.ParseDigest(image.Name)
+	if err != nil {
+		return false, err
+	}
+	v, err := digest.NewDigestVerifier(dgst)
+	if err != nil {
+		return false, err
+	}
+	sm := schema1.SignedManifest{Raw: newManifest}
+	raw, err := sm.Payload()
+	if err != nil {
+		return false, err
+	}
+	if _, err := v.Write(raw); err != nil {
+		return false, err
+	}
+	return v.Verified(), nil
+}
+
+// ImageWithMetadata returns a copy of image with the DockerImageMetadata filled in
 // from the raw DockerImageManifest data stored in the image.
 func ImageWithMetadata(image *Image) error {
 	if len(image.DockerImageManifest) == 0 {
+		return nil
+	}
+
+	if len(image.DockerImageLayers) > 0 && image.DockerImageMetadata.Size > 0 {
+		glog.V(5).Infof("Image metadata already filled for %s", image.Name)
+		// don't update image already filled
 		return nil
 	}
 
@@ -436,6 +468,19 @@ func LatestTaggedImage(stream *ImageStream, tag string) *TagEvent {
 	}
 
 	return nil
+}
+
+// DifferentTagEvent returns true if the supplied tag event matches the current stream tag event.
+// Generation is not compared.
+func DifferentTagEvent(stream *ImageStream, tag string, next TagEvent) bool {
+	tags, ok := stream.Status.Tags[tag]
+	if !ok || len(tags.Items) == 0 {
+		return true
+	}
+	previous := &tags.Items[0]
+	sameRef := previous.DockerImageReference == next.DockerImageReference
+	sameImage := previous.Image == next.Image
+	return !(sameRef && sameImage)
 }
 
 // AddTagEventToImageStream attempts to update the given image stream with a tag event. It will
@@ -600,16 +645,17 @@ func ResolveImageID(stream *ImageStream, imageID string) (*TagEvent, error) {
 	var event *TagEvent
 	set := sets.NewString()
 	for _, history := range stream.Status.Tags {
-		for _, tagging := range history.Items {
+		for i := range history.Items {
+			tagging := &history.Items[i]
 			if d, err := digest.ParseDigest(tagging.Image); err == nil {
 				if strings.HasPrefix(d.Hex(), imageID) || strings.HasPrefix(tagging.Image, imageID) {
-					event = &tagging
+					event = tagging
 					set.Insert(tagging.Image)
 				}
 				continue
 			}
 			if strings.HasPrefix(tagging.Image, imageID) {
-				event = &tagging
+				event = tagging
 				set.Insert(tagging.Image)
 			}
 		}
@@ -622,9 +668,9 @@ func ResolveImageID(stream *ImageStream, imageID string) (*TagEvent, error) {
 			Image:                event.Image,
 		}, nil
 	case 0:
-		return nil, errors.NewNotFound("imageStreamImage", imageID)
+		return nil, errors.NewNotFound(Resource("imagestreamimage"), imageID)
 	default:
-		return nil, errors.NewConflict("imageStreamImage", imageID, fmt.Errorf("multiple images match the prefix %q: %s", imageID, strings.Join(set.List(), ", ")))
+		return nil, errors.NewConflict(Resource("imagestreamimage"), imageID, fmt.Errorf("multiple images match the prefix %q: %s", imageID, strings.Join(set.List(), ", ")))
 	}
 }
 
@@ -654,6 +700,17 @@ func ShortDockerImageID(image *DockerImage, length int) string {
 		id = id[:length]
 	}
 	return id
+}
+
+// HasTagCondition returns true if the specified image stream tag has a condition with the same type, status, and
+// reason (does not check generation, date, or message).
+func HasTagCondition(stream *ImageStream, tag string, condition TagEventCondition) bool {
+	for _, existing := range stream.Status.Tags[tag].Conditions {
+		if condition.Type == existing.Type && condition.Status == existing.Status && condition.Reason == existing.Reason {
+			return true
+		}
+	}
+	return false
 }
 
 // SetTagConditions applies the specified conditions to the status of the given tag.
@@ -763,4 +820,26 @@ func PrioritizeTags(tags []string) {
 		finalTags = append(finalTags, v)
 	}
 	copy(tags, finalTags)
+}
+
+func ContainerImageEntrypointByAnnotation(annotations map[string]string, containerName string) ([]string, bool) {
+	s, ok := annotations[fmt.Sprintf(containerImageEntrypointAnnotationFormatKey, containerName)]
+	if !ok {
+		return nil, false
+	}
+	var arr []string
+	if err := json.Unmarshal([]byte(s), &arr); err != nil {
+		return nil, false
+	}
+	return arr, true
+}
+
+func SetContainerImageEntrypointAnnotation(annotations map[string]string, containerName string, cmd []string) {
+	key := fmt.Sprintf(containerImageEntrypointAnnotationFormatKey, containerName)
+	if len(cmd) == 0 {
+		delete(annotations, key)
+		return
+	}
+	s, _ := json.Marshal(cmd)
+	annotations[key] = string(s)
 }

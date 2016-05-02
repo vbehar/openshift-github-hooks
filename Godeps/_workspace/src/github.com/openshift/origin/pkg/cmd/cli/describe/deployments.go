@@ -13,8 +13,8 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	kerrors "k8s.io/kubernetes/pkg/api/errors"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
 	kctl "k8s.io/kubernetes/pkg/kubectl"
+	qosutil "k8s.io/kubernetes/pkg/kubelet/qos/util"
 	"k8s.io/kubernetes/pkg/labels"
 
 	kubegraph "github.com/openshift/origin/pkg/api/kubegraph/nodes"
@@ -76,13 +76,13 @@ func NewDeploymentConfigDescriberForConfig(client client.Interface, kclient kcli
 				return config, nil
 			},
 			getDeploymentFunc: func(namespace, name string) (*kapi.ReplicationController, error) {
-				return nil, kerrors.NewNotFound("ReplicatonController", name)
+				return nil, kerrors.NewNotFound(kapi.Resource("replicatoncontroller"), name)
 			},
 			listDeploymentsFunc: func(namespace string, selector labels.Selector) (*kapi.ReplicationControllerList, error) {
-				return nil, kerrors.NewNotFound("ReplicationControllerList", fmt.Sprintf("%v", selector))
+				return nil, kerrors.NewNotFound(kapi.Resource("replicationcontrollerlist"), fmt.Sprintf("%v", selector))
 			},
 			listPodsFunc: func(namespace string, selector labels.Selector) (*kapi.PodList, error) {
-				return nil, kerrors.NewNotFound("PodList", fmt.Sprintf("%v", selector))
+				return nil, kerrors.NewNotFound(kapi.Resource("podlist"), fmt.Sprintf("%v", selector))
 			},
 			listEventsFunc: func(deploymentConfig *deployapi.DeploymentConfig) (*kapi.EventList, error) {
 				return kclient.Events(config.Namespace).Search(config)
@@ -102,10 +102,10 @@ func NewDeploymentConfigDescriber(client client.Interface, kclient kclient.Inter
 				return kclient.ReplicationControllers(namespace).Get(name)
 			},
 			listDeploymentsFunc: func(namespace string, selector labels.Selector) (*kapi.ReplicationControllerList, error) {
-				return kclient.ReplicationControllers(namespace).List(selector, fields.Everything())
+				return kclient.ReplicationControllers(namespace).List(kapi.ListOptions{LabelSelector: selector})
 			},
 			listPodsFunc: func(namespace string, selector labels.Selector) (*kapi.PodList, error) {
-				return kclient.Pods(namespace).List(selector, fields.Everything())
+				return kclient.Pods(namespace).List(kapi.ListOptions{LabelSelector: selector})
 			},
 			listEventsFunc: func(deploymentConfig *deployapi.DeploymentConfig) (*kapi.EventList, error) {
 				return kclient.Events(deploymentConfig.Namespace).Search(deploymentConfig)
@@ -179,9 +179,13 @@ func printStrategy(strategy deployapi.DeploymentStrategy, w *tabwriter.Writer) {
 	case deployapi.DeploymentStrategyTypeRecreate:
 		if strategy.RecreateParams != nil {
 			pre := strategy.RecreateParams.Pre
+			mid := strategy.RecreateParams.Mid
 			post := strategy.RecreateParams.Post
 			if pre != nil {
 				printHook("Pre-deployment", pre, w)
+			}
+			if mid != nil {
+				printHook("Mid-deployment", mid, w)
 			}
 			if post != nil {
 				printHook("Post-deployment", post, w)
@@ -247,18 +251,77 @@ func printTriggers(triggers []deployapi.DeploymentTriggerPolicy, w *tabwriter.Wr
 func printDeploymentConfigSpec(spec deployapi.DeploymentConfigSpec, w io.Writer) error {
 	fmt.Fprint(w, "Template:\n")
 
-	fmt.Fprintf(w, "  Selector:\t%s\n  Replicas:\t%d\n",
-		formatLabels(spec.Selector),
-		spec.Replicas)
-
-	fmt.Fprintf(w, "  Containers:\n  NAME\tIMAGE\tENV\n")
-	for _, container := range spec.Template.Spec.Containers {
-		fmt.Fprintf(w, "  %s\t%s\t%s\n",
-			container.Name,
-			container.Image,
-			formatLabels(convertEnv(container.Env)))
+	if spec.Test {
+		fmt.Fprintf(w, "  Selector:\t%s\n  Replicas:\t%d (test, will be scaled down between deployments)\n",
+			formatLabels(spec.Selector),
+			spec.Replicas)
+	} else {
+		fmt.Fprintf(w, "  Selector:\t%s\n  Replicas:\t%d\n",
+			formatLabels(spec.Selector),
+			spec.Replicas)
 	}
+
+	fmt.Fprintf(w, "  Containers:\n")
+	describeContainers(spec.Template.Spec, w)
+
 	return nil
+}
+
+// TODO: Reuse this from upstream once kubernetes/issues/21551 is fixed.
+func describeContainers(spec kapi.PodSpec, w io.Writer) {
+	for _, container := range spec.Containers {
+		fmt.Fprintf(w, "  %v:\n", container.Name)
+		fmt.Fprintf(w, "    Image:\t%s\n", container.Image)
+
+		if len(container.Command) > 0 {
+			fmt.Fprintf(w, "    Command:\n")
+			for _, c := range container.Command {
+				fmt.Fprintf(w, "      %s\n", c)
+			}
+		}
+		if len(container.Args) > 0 {
+			fmt.Fprintf(w, "    Args:\n")
+			for _, arg := range container.Args {
+				fmt.Fprintf(w, "      %s\n", arg)
+			}
+		}
+
+		resourceToQoS := qosutil.GetQoS(&container)
+		if len(resourceToQoS) > 0 {
+			fmt.Fprintf(w, "    QoS Tier:\n")
+		}
+		for resource, qos := range resourceToQoS {
+			fmt.Fprintf(w, "      %s:\t%s\n", resource, qos)
+		}
+
+		if len(container.Resources.Limits) > 0 {
+			fmt.Fprintf(w, "    Limits:\n")
+		}
+		for name, quantity := range container.Resources.Limits {
+			fmt.Fprintf(w, "      %s:\t%s\n", name, quantity.String())
+		}
+
+		if len(container.Resources.Requests) > 0 {
+			fmt.Fprintf(w, "    Requests:\n")
+		}
+		for name, quantity := range container.Resources.Requests {
+			fmt.Fprintf(w, "      %s:\t%s\n", name, quantity.String())
+		}
+
+		if container.LivenessProbe != nil {
+			probe := kctl.DescribeProbe(container.LivenessProbe)
+			fmt.Fprintf(w, "    Liveness:\t%s\n", probe)
+		}
+		if container.ReadinessProbe != nil {
+			probe := kctl.DescribeProbe(container.ReadinessProbe)
+			fmt.Fprintf(w, "    Readiness:\t%s\n", probe)
+		}
+
+		fmt.Fprintf(w, "    Environment Variables:\n")
+		for _, e := range container.Env {
+			fmt.Fprintf(w, "      %s:\t%s\n", e.Name, e.Value)
+		}
+	}
 }
 
 func printDeploymentRc(deployment *kapi.ReplicationController, client deploymentDescriberClient, w io.Writer, header string, verbose bool) error {
@@ -324,10 +387,10 @@ func NewLatestDeploymentsDescriber(client client.Interface, kclient kclient.Inte
 				return kclient.ReplicationControllers(namespace).Get(name)
 			},
 			listDeploymentsFunc: func(namespace string, selector labels.Selector) (*kapi.ReplicationControllerList, error) {
-				return kclient.ReplicationControllers(namespace).List(selector, fields.Everything())
+				return kclient.ReplicationControllers(namespace).List(kapi.ListOptions{LabelSelector: selector})
 			},
 			listPodsFunc: func(namespace string, selector labels.Selector) (*kapi.PodList, error) {
-				return kclient.Pods(namespace).List(selector, fields.Everything())
+				return kclient.Pods(namespace).List(kapi.ListOptions{LabelSelector: selector})
 			},
 			listEventsFunc: func(deploymentConfig *deployapi.DeploymentConfig) (*kapi.EventList, error) {
 				return kclient.Events(deploymentConfig.Namespace).Search(deploymentConfig)

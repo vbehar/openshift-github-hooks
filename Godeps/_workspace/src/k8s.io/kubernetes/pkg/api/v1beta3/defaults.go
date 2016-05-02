@@ -19,13 +19,15 @@ package v1beta3
 import (
 	"strings"
 
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/util"
 	"github.com/golang/glog"
+
+	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/intstr"
 )
 
-func addDefaultingFuncs() {
-	api.Scheme.AddDefaultingFuncs(
+func addDefaultingFuncs(scheme *runtime.Scheme) {
+	scheme.AddDefaultingFuncs(
 		func(obj *ReplicationController) {
 			var labels map[string]string
 			if obj.Spec.Template != nil {
@@ -91,8 +93,8 @@ func addDefaultingFuncs() {
 				if sp.Protocol == "" {
 					sp.Protocol = ProtocolTCP
 				}
-				if sp.TargetPort == util.NewIntOrStringFromInt(0) || sp.TargetPort == util.NewIntOrStringFromString("") {
-					sp.TargetPort = util.NewIntOrStringFromInt(sp.Port)
+				if sp.TargetPort == intstr.FromInt(0) || sp.TargetPort == intstr.FromString("") {
+					sp.TargetPort = intstr.FromInt(sp.Port)
 				}
 			}
 		},

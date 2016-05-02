@@ -5,6 +5,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/vbehar/openshift-github-hooks/pkg/openshift"
+
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 )
@@ -37,7 +39,8 @@ func syncHooks(cmd *cobra.Command) {
 	githubManager := NewGitHubHooksManager(githubToken)
 	go githubManager.Run(events)
 
-	factory := getFactory(cmd.Flags())
+	//factory := getFactory(cmd.Flags())
+	factory := openshift.Factory
 	watcher := &BuildConfigsWatcher{
 		factory: *factory,
 	}

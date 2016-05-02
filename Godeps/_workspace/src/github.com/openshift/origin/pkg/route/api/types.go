@@ -3,7 +3,7 @@ package api
 import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/intstr"
 )
 
 // Route encapsulates the inputs needed to connect an alias to endpoints.
@@ -43,12 +43,55 @@ type RoutePort struct {
 	// The target port on pods selected by the service this route points to.
 	// If this is a string, it will be looked up as a named port in the target
 	// endpoints port list. Required
-	TargetPort util.IntOrString
+	TargetPort intstr.IntOrString
 }
 
 // RouteStatus provides relevant info about the status of a route, including which routers
 // acknowledge it.
 type RouteStatus struct {
+	// Ingress describes the places where the route may be exposed. The list of
+	// ingress points may contain duplicate Host or RouterName values. Routes
+	// are considered live once they are `Ready`
+	Ingress []RouteIngress
+}
+
+// RouteIngress holds information about the places where a route is exposed
+type RouteIngress struct {
+	// Host is the host string under which the route is exposed; this value is required
+	Host string
+	// Name is a name chosen by the router to identify itself; this value is required
+	RouterName string
+	// Conditions is the state of the route, may be empty.
+	Conditions []RouteIngressCondition
+}
+
+// RouteIngressConditionType is a valid value for RouteCondition
+type RouteIngressConditionType string
+
+// These are valid conditions of pod.
+const (
+	// RouteAdmitted means the route is able to service requests for the provided Host
+	RouteAdmitted RouteIngressConditionType = "Admitted"
+	// TODO: add other route condition types
+)
+
+// RouteIngressCondition contains details for the current condition of this pod.
+// TODO: add LastTransitionTime, Reason, Message to match NodeCondition api.
+type RouteIngressCondition struct {
+	// Type is the type of the condition.
+	// Currently only Ready.
+	Type RouteIngressConditionType
+	// Status is the status of the condition.
+	// Can be True, False, Unknown.
+	Status kapi.ConditionStatus
+	// (brief) reason for the condition's last transition, and is usually a machine and human
+	// readable constant
+	Reason string
+	// Human readable message indicating details about last transition.
+	Message string
+	// RFC 3339 date and time at which the object was acknowledged by the router.
+	// This may be before the router exposes the route
+	LastTransitionTime *unversioned.Time
 }
 
 // RouteList is a collection of Routes.

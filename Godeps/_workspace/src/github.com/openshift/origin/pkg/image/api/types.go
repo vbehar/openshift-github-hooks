@@ -30,6 +30,16 @@ const (
 
 	// DefaultImageTag is used when an image tag is needed and the configuration does not specify a tag to use.
 	DefaultImageTag = "latest"
+
+	// ResourceProjectImagesSize stands for a sum of sizes of all images stored in an internal registry under
+	// a single namespace. Used as a resource quota key.
+	ResourceProjectImagesSize kapi.ResourceName = "openshift.io/projectimagessize"
+	// ResourceImageStreamSize stands for a sum of sizes of all images stored in an internal registry within
+	// a single image stream (aka. repository). Used as a resource quota key.
+	ResourceImageStreamSize kapi.ResourceName = "openshift.io/imagestreamsize"
+	// ResourceImageSize stands for a size of an image stored in an internal registry. Used as a resource
+	// quota key. If set, bigger images will be refused during a push.
+	ResourceImageSize kapi.ResourceName = "openshift.io/imagesize"
 )
 
 // Image is an immutable representation of a Docker image and metadata at a point in time.
@@ -89,6 +99,8 @@ type ImageStreamSpec struct {
 // TagReference specifies optional annotations for images using this tag and an optional reference to
 // an ImageStreamTag, ImageStreamImage, or DockerImage this tag should track.
 type TagReference struct {
+	// Name of the tag
+	Name string
 	// Optional; if specified, annotations that are applied to images retrieved via ImageStreamTags.
 	Annotations map[string]string
 	// Optional; if specified, a reference to another image that this tag should point to. Valid values
@@ -112,6 +124,8 @@ type TagReference struct {
 type TagImportPolicy struct {
 	// Insecure is true if the server may bypass certificate verification or connect directly over HTTP during image import.
 	Insecure bool
+	// Scheduled indicates to the server that this tag should be periodically checked to ensure it is up to date, and imported
+	Scheduled bool
 }
 
 // ImageStreamStatus contains information about the state of this image stream.
@@ -189,6 +203,19 @@ type ImageStreamMapping struct {
 type ImageStreamTag struct {
 	unversioned.TypeMeta
 	kapi.ObjectMeta
+
+	// Tag is the spec tag associated with this image stream tag, and it may be null
+	// if only pushes have occured to this image stream.
+	Tag *TagReference
+
+	// Generation is the current generation of the tagged image - if tag is provided
+	// and this value is not equal to the tag generation, a user has requested an
+	// import that has not completed, or Conditions will be filled out indicating any
+	// error.
+	Generation int64
+
+	// Conditions is an array of conditions that apply to the image stream tag.
+	Conditions []TagEventCondition
 
 	// The Image associated with the ImageStream and tag.
 	Image Image

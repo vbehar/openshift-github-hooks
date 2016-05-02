@@ -1,8 +1,7 @@
 package client
 
 import (
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
+	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/watch"
 
 	routeapi "github.com/openshift/origin/pkg/route/api"
@@ -15,12 +14,13 @@ type RoutesNamespacer interface {
 
 // RouteInterface exposes methods on Route resources
 type RouteInterface interface {
-	List(label labels.Selector, field fields.Selector) (*routeapi.RouteList, error)
+	List(opts kapi.ListOptions) (*routeapi.RouteList, error)
 	Get(name string) (*routeapi.Route, error)
 	Create(route *routeapi.Route) (*routeapi.Route, error)
 	Update(route *routeapi.Route) (*routeapi.Route, error)
+	UpdateStatus(route *routeapi.Route) (*routeapi.Route, error)
 	Delete(name string) error
-	Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error)
+	Watch(opts kapi.ListOptions) (watch.Interface, error)
 }
 
 // routes implements RouteInterface interface
@@ -38,13 +38,12 @@ func newRoutes(c *Client, namespace string) *routes {
 }
 
 // List takes a label and field selector, and returns the list of routes that match that selectors
-func (c *routes) List(label labels.Selector, field fields.Selector) (result *routeapi.RouteList, err error) {
+func (c *routes) List(opts kapi.ListOptions) (result *routeapi.RouteList, err error) {
 	result = &routeapi.RouteList{}
 	err = c.r.Get().
 		Namespace(c.ns).
 		Resource("routes").
-		LabelsSelectorParam(label).
-		FieldsSelectorParam(field).
+		VersionedParams(&opts, kapi.ParameterCodec).
 		Do().
 		Into(result)
 	return
@@ -76,14 +75,19 @@ func (c *routes) Update(route *routeapi.Route) (result *routeapi.Route, err erro
 	return
 }
 
+// UpdateStatus takes the route with altered status.  Returns the server's representation of the route, and an error, if it occurs.
+func (c *routes) UpdateStatus(route *routeapi.Route) (result *routeapi.Route, err error) {
+	result = &routeapi.Route{}
+	err = c.r.Put().Namespace(c.ns).Resource("routes").Name(route.Name).SubResource("status").Body(route).Do().Into(result)
+	return
+}
+
 // Watch returns a watch.Interface that watches the requested routes.
-func (c *routes) Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
+func (c *routes) Watch(opts kapi.ListOptions) (watch.Interface, error) {
 	return c.r.Get().
 		Prefix("watch").
 		Namespace(c.ns).
 		Resource("routes").
-		Param("resourceVersion", resourceVersion).
-		LabelsSelectorParam(label).
-		FieldsSelectorParam(field).
+		VersionedParams(&opts, kapi.ParameterCodec).
 		Watch()
 }

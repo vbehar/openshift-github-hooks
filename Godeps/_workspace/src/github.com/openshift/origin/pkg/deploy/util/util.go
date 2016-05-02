@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,7 +10,6 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/watch"
 
 	deployapi "github.com/openshift/origin/pkg/deploy/api"
 	"github.com/openshift/origin/pkg/util/namer"
@@ -105,11 +105,27 @@ func HasChangeTrigger(config *deployapi.DeploymentConfig) bool {
 	return false
 }
 
+// CauseFromAutomaticImageChange inspects any existing deployment config cause and
+// validates if it comes from the image change controller.
+func CauseFromAutomaticImageChange(config *deployapi.DeploymentConfig) bool {
+	if config.Status.Details != nil && len(config.Status.Details.Causes) > 0 {
+		for _, trigger := range config.Spec.Triggers {
+			if trigger.Type == deployapi.DeploymentTriggerOnImageChange &&
+				trigger.ImageChangeParams.Automatic &&
+				config.Status.Details.Causes[0].Type == deployapi.DeploymentTriggerOnImageChange &&
+				reflect.DeepEqual(trigger.ImageChangeParams.From, config.Status.Details.Causes[0].ImageTrigger.From) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // DecodeDeploymentConfig decodes a DeploymentConfig from controller using codec. An error is returned
 // if the controller doesn't contain an encoded config.
-func DecodeDeploymentConfig(controller *api.ReplicationController, codec runtime.Codec) (*deployapi.DeploymentConfig, error) {
+func DecodeDeploymentConfig(controller *api.ReplicationController, decoder runtime.Decoder) (*deployapi.DeploymentConfig, error) {
 	encodedConfig := []byte(EncodedDeploymentConfigFor(controller))
-	if decoded, err := codec.Decode(encodedConfig); err == nil {
+	if decoded, err := runtime.Decode(decoder, encodedConfig); err == nil {
 		if config, ok := decoded.(*deployapi.DeploymentConfig); ok {
 			return config, nil
 		} else {
@@ -122,7 +138,7 @@ func DecodeDeploymentConfig(controller *api.ReplicationController, codec runtime
 
 // EncodeDeploymentConfig encodes config as a string using codec.
 func EncodeDeploymentConfig(config *deployapi.DeploymentConfig, codec runtime.Codec) (string, error) {
-	if bytes, err := codec.Encode(config); err == nil {
+	if bytes, err := runtime.Encode(codec, config); err == nil {
 		return string(bytes[:]), nil
 	} else {
 		return "", err
@@ -209,21 +225,6 @@ func MakeDeployment(config *deployapi.DeploymentConfig, codec runtime.Codec) (*a
 	}
 
 	return deployment, nil
-}
-
-// ListWatcherImpl is a pluggable ListWatcher.
-// TODO: This has been incorporated upstream; replace during a future rebase.
-type ListWatcherImpl struct {
-	ListFunc  func() (runtime.Object, error)
-	WatchFunc func(resourceVersion string) (watch.Interface, error)
-}
-
-func (lw *ListWatcherImpl) List() (runtime.Object, error) {
-	return lw.ListFunc()
-}
-
-func (lw *ListWatcherImpl) Watch(resourceVersion string) (watch.Interface, error) {
-	return lw.WatchFunc(resourceVersion)
 }
 
 func DeploymentConfigNameFor(obj runtime.Object) string {

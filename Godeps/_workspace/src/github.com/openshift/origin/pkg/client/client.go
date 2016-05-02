@@ -7,7 +7,9 @@ import (
 	"runtime"
 	"strings"
 
-	kclient "k8s.io/kubernetes/pkg/client/unversioned"
+	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/client/restclient"
 
 	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/version"
@@ -243,18 +245,18 @@ func (c *Client) ClusterRoleBindings() ClusterRoleBindingInterface {
 
 // Client is an OpenShift client object
 type Client struct {
-	*kclient.RESTClient
+	*restclient.RESTClient
 }
 
 // New creates an OpenShift client for the given config. This client works with builds, deployments,
 // templates, routes, and images. It allows operations such as list, get, update and delete on these
 // objects. An error is returned if the provided configuration is not valid.
-func New(c *kclient.Config) (*Client, error) {
+func New(c *restclient.Config) (*Client, error) {
 	config := *c
 	if err := SetOpenShiftDefaults(&config); err != nil {
 		return nil, err
 	}
-	client, err := kclient.RESTClientFor(&config)
+	client, err := restclient.RESTClientFor(&config)
 	if err != nil {
 		return nil, err
 	}
@@ -264,30 +266,33 @@ func New(c *kclient.Config) (*Client, error) {
 
 // SetOpenShiftDefaults sets the default settings on the passed
 // client configuration
-func SetOpenShiftDefaults(config *kclient.Config) error {
+func SetOpenShiftDefaults(config *restclient.Config) error {
 	if len(config.UserAgent) == 0 {
 		config.UserAgent = DefaultOpenShiftUserAgent()
 	}
-	if config.Version == "" {
+	if config.GroupVersion == nil {
 		// Clients default to the preferred code API version
-		config.Version = latest.Version
+		groupVersionCopy := latest.Version
+		config.GroupVersion = &groupVersionCopy
 	}
-	if config.Prefix == "" {
-		config.Prefix = "/oapi"
+	if config.APIPath == "" {
+		config.APIPath = "/oapi"
 	}
-	version := config.Version
-	versionInterfaces, err := latest.InterfacesFor(version)
-	if err != nil {
-		return fmt.Errorf("API version '%s' is not recognized (valid values: %s)", version, strings.Join(latest.Versions, ", "))
-	}
+
+	// groupMeta, err := registered.Group(config.GroupVersion.Group)
+	// if err != nil {
+	// 	return fmt.Errorf("API group %q is not recognized (valid values: %v)", config.GroupVersion.Group, latest.Versions)
+	// }
+
 	if config.Codec == nil {
-		config.Codec = versionInterfaces.Codec
+		config.Codec = kapi.Codecs.LegacyCodec(*config.GroupVersion)
+		// config.Codec = kapi.Codecs.CodecForVersions(groupMeta.Codec, []unversioned.GroupVersion{*config.GroupVersion}, groupMeta.GroupVersions)
 	}
 	return nil
 }
 
 // NewOrDie creates an OpenShift client and panics if the provided API version is not recognized.
-func NewOrDie(c *kclient.Config) *Client {
+func NewOrDie(c *restclient.Config) *Client {
 	client, err := New(c)
 	if err != nil {
 		panic(err)
@@ -308,4 +313,14 @@ func DefaultOpenShiftUserAgent() string {
 	seg := strings.SplitN(version, "-", 2)
 	version = seg[0]
 	return fmt.Sprintf("%s/%s (%s/%s) openshift/%s", path.Base(os.Args[0]), version, runtime.GOOS, runtime.GOARCH, commit)
+}
+
+// IsStatusErrorKind returns true if this error describes the provided kind.
+func IsStatusErrorKind(err error, kind string) bool {
+	if s, ok := err.(errors.APIStatus); ok {
+		if details := s.Status().Details; details != nil {
+			return kind == details.Kind
+		}
+	}
+	return false
 }
