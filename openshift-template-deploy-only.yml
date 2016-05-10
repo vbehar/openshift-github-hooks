@@ -1,26 +1,39 @@
 # This OpenShift template will deploy a pre-build docker image from DockerHub
 # Use it from the CLI with:
-# $ oc new-app -f openshift-template-deploy-only.yml -p GITHUB_ACCESS_TOKEN=xxx,SERVICE_ACCOUNT=xxx
+# $ oc new-app -f openshift-template-deploy-only.yml -p SERVICE_ACCOUNT=xxx,GITHUB_ACCESS_TOKEN=xxx,GITHUB_ORGANIZATION=xxx
 
 kind: Template
 apiVersion: v1
 metadata:
-  name: github-hooks-sync-deployer
+  name: github-hooks-controller-deployer
   annotations:
-    description: Deploys the OpenShift GitHub Hooks Sync application.
-    tags: openshift,github,hooks,sync
+    description: Deploys the OpenShift GitHub Hooks Sync controller.
+    tags: openshift,github,hooks,sync,controller
 labels:
-  template: github-hooks-sync-deployer
+  template: github-hooks-controller-deployer
 
 parameters:
 
-- name: GITHUB_ACCESS_TOKEN
-  description: The GitHub token used to authenticate to the API - https://github.com/settings/tokens
-  required: true
+# mandatory parameters
 - name: SERVICE_ACCOUNT
   description: The name of a ServiceAccount which has the cluster-reader role
   required: true
+- name: GITHUB_ACCESS_TOKEN
+  description: The GitHub token used to authenticate to the API - https://github.com/settings/tokens
+  required: true
+- name: GITHUB_ORGANIZATION
+  description: The name of the GitHub organization used to authenticate to the API - https://github.com/settings/tokens
+  required: true
 
+# optional parameters
+- name: RESYNC_PERIOD
+  description: Define the interval of time to perform a full resync of all the webhooks. Set to 0 to disable.
+  value: 1h
+- name: LOG_LEVEL
+  description: "Log level. 0 for almost no logs (except warnings/errors), 1 for minimum info logs, 3 for more logs, 5 even more, 8 forget about it ;-)"
+  value: "1"
+
+# optional deployer options
 - name: IMAGE
   description: The reference of the Docker image to deploy
   value: vbehar/openshift-github-hooks:latest
@@ -33,30 +46,33 @@ objects:
 - kind: DeploymentConfig
   apiVersion: v1
   metadata:
-    name: github-hooks-sync
+    name: github-hooks-controller
   spec:
     replicas: 1
     strategy:
       type: Rolling
       rollingParams:
-        maxUnavailable: 0
-        maxSurge: 1
+        maxUnavailable: 1
+        maxSurge: 0
     template:
       metadata:
         labels:
-          deploymentconfig: github-hooks-sync
+          deployment-config.name: github-hooks-controller
       spec:
         serviceAccountName: ${SERVICE_ACCOUNT}
         containers:
-        - name: github-hooks-sync
+        - name: github-hooks-controller
           image: ${IMAGE}
           command:
-          - /openshift-github-hooks
+          - openshift-github-hooks
           - sync
-          - --v=1 # adjust for more (v=3) or less (v=0) logs
+          - --resync-period=${RESYNC_PERIOD}
+          - --v=${LOG_LEVEL}
           env:
           - name: GITHUB_ACCESS_TOKEN
             value: ${GITHUB_ACCESS_TOKEN}
+          - name: GITHUB_ORGANIZATION
+            value: ${GITHUB_ORGANIZATION}
           - name: TZ
             value: ${TIMEZONE}
     triggers:

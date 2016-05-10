@@ -1,37 +1,30 @@
-package main
+package github
 
 import (
-	"strconv"
 	"testing"
+
+	"github.com/vbehar/openshift-github-hooks/pkg/api"
 
 	"github.com/google/go-github/github"
 )
 
-func TestHookToGithubHook(t *testing.T) {
-	hooks := []Hook{
+func TestNewGithubHook(t *testing.T) {
+	hooks := []api.Hook{
 		{
-			Url:         "",
-			InsecureSsl: true,
+			TargetURL: "",
 		},
 		{
-			Url:         "https://openshift.org/",
-			InsecureSsl: true,
-		},
-		{
-			Url:         "https://openshift.org/",
-			InsecureSsl: false,
+			TargetURL: "https://openshift.org/",
 		},
 	}
 
 	for count, hook := range hooks {
-		githubHook := hook.ToGithubHook()
-		if githubHook.Config["url"] != hook.Url {
-			t.Errorf("Test[%d] Failed: Expected '%s' URL but got '%s'", count, hook.Url, githubHook.Config["url"])
+		githubHook := NewGithubHook(hook)
+		if githubHook.Config["url"] != hook.TargetURL {
+			t.Errorf("Test[%d] Failed: Expected '%s' URL but got '%s'", count, hook.TargetURL, githubHook.Config["url"])
 		}
-		insecureSslStr := githubHook.Config["insecure_ssl"].(string)
-		insecureSsl, err := strconv.ParseBool(insecureSslStr)
-		if insecureSsl != hook.InsecureSsl {
-			t.Errorf("Test[%d] Failed: Expected '%v' insecure SSL but got '%v' (err is: %v)", count, hook.InsecureSsl, insecureSsl, err)
+		if githubHook.Config["insecure_ssl"] != "true" {
+			t.Errorf("Test[%d] Failed: Expected '%v' insecure SSL but got '%v'", count, "true", githubHook.Config["insecure_ssl"])
 		}
 		if githubHook.Config["content_type"] != "json" {
 			t.Errorf("Test[%d] Failed: Expected '%s' content type but got '%s'", count, "json", githubHook.Config["content_type"])
@@ -45,15 +38,15 @@ func TestHookToGithubHook(t *testing.T) {
 	}
 }
 
-func TestHookMatchesGithubHook(t *testing.T) {
+func TestHooksMatches(t *testing.T) {
 	tests := []struct {
-		hook           Hook
+		hook           api.Hook
 		githubHook     github.Hook
 		expectedResult bool
 	}{
 		{
-			hook: Hook{
-				Url: "https://openshift.org/",
+			hook: api.Hook{
+				TargetURL: "https://openshift.org/",
 			},
 			githubHook: github.Hook{
 				Config: map[string]interface{}{
@@ -63,8 +56,8 @@ func TestHookMatchesGithubHook(t *testing.T) {
 			expectedResult: true,
 		},
 		{
-			hook: Hook{
-				Url: "https://openshift.org/",
+			hook: api.Hook{
+				TargetURL: "https://openshift.org/",
 			},
 			githubHook: github.Hook{
 				Config: map[string]interface{}{
@@ -76,7 +69,7 @@ func TestHookMatchesGithubHook(t *testing.T) {
 	}
 
 	for count, test := range tests {
-		result := test.hook.MatchesGithubHook(test.githubHook)
+		result := HooksMatches(test.hook, test.githubHook)
 		if result != test.expectedResult {
 			t.Errorf("Test[%d] Failed: Expected '%v' but got '%v'", count, test.expectedResult, result)
 		}
