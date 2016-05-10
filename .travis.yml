@@ -4,6 +4,7 @@ go: 1.6
 
 before_install:
     - go get github.com/golang/lint/golint
+    - go get github.com/mitchellh/gox
 
 install:
   # We override the install phase to avoid the default "go get ... / godep restore"
@@ -17,4 +18,11 @@ before_script:
 
 script:
   - go test -v ./...
-  - go build
+  - gox -output="build/openshift-github-hooks-{{.OS}}-{{.Arch}}" -osarch="linux/amd64 darwin/amd64 windows/amd64"
+
+after_success:
+  # deploy to bintray from the master branch only
+  - test ${TRAVIS_BRANCH} != "master" && exit
+  - curl -i -XPUT -uvbehar:${BINTRAY_KEY} -T build/openshift-github-hooks-linux-amd64 "https://api.bintray.com/content/vbehar/openshift-github-hooks/openshift-github-hooks/build-${TRAVIS_BUILD_NUMBER}/build-${TRAVIS_BUILD_NUMBER}/linux-amd64/openshift-github-hooks?publish=1"
+  - curl -i -XPUT -uvbehar:${BINTRAY_KEY} -T build/openshift-github-hooks-darwin-amd64 "https://api.bintray.com/content/vbehar/openshift-github-hooks/openshift-github-hooks/build-${TRAVIS_BUILD_NUMBER}/build-${TRAVIS_BUILD_NUMBER}/darwin-amd64/openshift-github-hooks?publish=1"
+  - curl -i -XPUT -uvbehar:${BINTRAY_KEY} -T build/openshift-github-hooks-windows-amd64 "https://api.bintray.com/content/vbehar/openshift-github-hooks/openshift-github-hooks/build-${TRAVIS_BUILD_NUMBER}/build-${TRAVIS_BUILD_NUMBER}/windows-amd64/openshift-github-hooks.exe?publish=1"
