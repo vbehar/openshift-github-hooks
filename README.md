@@ -2,6 +2,7 @@
 
 **Manages GitHub hooks for OpenShift BuildConfig triggers.**
 
+[![Download](https://api.bintray.com/packages/vbehar/openshift-github-hooks/openshift-github-hooks/images/download.svg)](https://bintray.com/vbehar/openshift-github-hooks/openshift-github-hooks/_latestVersion#files)
 [![DockerHub](https://img.shields.io/badge/docker-vbehar%2Fopenshift--github--hooks-008bb8.svg)](https://hub.docker.com/r/vbehar/openshift-github-hooks/)
 [![Travis](https://travis-ci.org/vbehar/openshift-github-hooks.svg?branch=master)](https://travis-ci.org/vbehar/openshift-github-hooks)
 [![Circle CI](https://circleci.com/gh/vbehar/openshift-github-hooks/tree/master.svg?style=svg)](https://circleci.com/gh/vbehar/openshift-github-hooks/tree/master)
@@ -49,6 +50,10 @@ It uses a [GitHub Access Token](https://help.github.com/articles/creating-an-acc
 
 ## Usage
 
+Pre-build binaries for the main platforms (`darwin-amd64`, `linux-amd64` and `windows-amd64`) are available in [bintray](https://bintray.com/vbehar/openshift-github-hooks/openshift-github-hooks/_latestVersion#files):
+
+ <https://bintray.com/vbehar/openshift-github-hooks/openshift-github-hooks/_latestVersion#files>
+
 This application has many commands, you can list them by running:
 
 ```
@@ -91,9 +96,9 @@ You can use either of the following templates:
 * [openshift-template-deploy-only.yml](openshift-template-deploy-only.yml) to just deploy from an existing Docker image - by default [vbehar/openshift-github-hooks](https://hub.docker.com/r/vbehar/openshift-github-hooks/)
 * [openshift-template-full.yml](openshift-template-full.yml) to build from sources (by default the [vbehar/openshift-github-hooks](https://github.com/vbehar/openshift-github-hooks) github repository) and then deploy
 
-### Running locally
+### Building from sources
 
-If you want to run it on your laptop:
+If you want to build it from sources:
 
 * Install [Go](http://golang.org/) (tested with 1.6) and [setup your GOPATH](https://golang.org/doc/code.html)
 * clone the sources in your `GOPATH`
