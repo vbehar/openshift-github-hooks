@@ -27,7 +27,7 @@ parameters:
 
 # optional parameters
 - name: GITHUB_BASE_URL
-  description: The GitHub Base URL - if you use GitHub Enterprise. Format: https://github.domain.tld/api/v3/
+  description: "The GitHub Base URL - if you use GitHub Enterprise. Format: https://github.domain.tld/api/v3/"
   value: https://api.github.com/
 - name: RESYNC_PERIOD
   description: Define the interval of time to perform a full resync of all the webhooks. Set to 0 to disable.
