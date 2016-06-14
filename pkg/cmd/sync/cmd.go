@@ -72,8 +72,8 @@ func init() {
 
 	syncCmd.Flags().AddFlagSet(openshift.Flags)
 
-	syncCmd.Flags().StringVar(&options.GithubBaseURL, "github-base-url", "https://api.github.com/",
-		"The GitHub Base URL - if you use GitHub Enterprise. Format: https://github.domain.tld/api/v3/")
+	syncCmd.Flags().StringVar(&options.GithubBaseURL, "github-base-url", cmd.GetenvWithDefault("GITHUB_BASE_URL", "https://api.github.com/"),
+		"The GitHub Base URL - if you use GitHub Enterprise. Could also be defined by the GITHUB_BASE_URL env var. Format: https://github.domain.tld/api/v3/")
 	syncCmd.Flags().BoolVar(&options.GithubInsecureSkipVerify, "github-insecure-skip-tls-verify", false,
 		"If true, the github server's certificate will not be checked for validity. This will make your HTTPS connections insecure.")
 	syncCmd.Flags().StringVar(&options.Token, "github-token", os.Getenv("GITHUB_ACCESS_TOKEN"),

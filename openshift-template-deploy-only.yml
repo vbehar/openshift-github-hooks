@@ -26,6 +26,9 @@ parameters:
   required: true
 
 # optional parameters
+- name: GITHUB_BASE_URL
+  description: The GitHub Base URL - if you use GitHub Enterprise. Format: https://github.domain.tld/api/v3/
+  value: https://api.github.com/
 - name: RESYNC_PERIOD
   description: Define the interval of time to perform a full resync of all the webhooks. Set to 0 to disable.
   value: 1h
@@ -66,9 +69,12 @@ objects:
           command:
           - openshift-github-hooks
           - sync
+          - --github-insecure-skip-tls-verify
           - --resync-period=${RESYNC_PERIOD}
           - --v=${LOG_LEVEL}
           env:
+          - name: GITHUB_BASE_URL
+            value: ${GITHUB_BASE_URL}
           - name: GITHUB_ACCESS_TOKEN
             value: ${GITHUB_ACCESS_TOKEN}
           - name: GITHUB_ORGANIZATION

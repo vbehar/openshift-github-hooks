@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,4 +31,12 @@ func FullName(cmd *cobra.Command) string {
 	}
 
 	return strings.TrimSpace(fullName)
+}
+
+// GetenvWithDefault wraps os.Getenv but allows to return a default value
+func GetenvWithDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); len(value) > 0 {
+		return value
+	}
+	return defaultValue
 }
