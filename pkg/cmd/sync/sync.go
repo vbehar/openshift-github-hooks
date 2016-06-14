@@ -28,7 +28,10 @@ func syncHooks(options *Options) {
 
 	stopChan := make(chan struct{})
 
-	hooksManager := github.NewHooksManager(options.Token)
+	hooksManager, err := github.NewHooksManager(options.GithubBaseURL, options.Token, options.GithubInsecureSkipVerify)
+	if err != nil {
+		glog.Fatalf("Failed to connect to GitHub: %v", err)
+	}
 
 	oclient, _, err := openshift.Factory.Clients()
 	if err != nil {

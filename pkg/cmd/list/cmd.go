@@ -12,10 +12,12 @@ import (
 
 // Options represents the command's options
 type Options struct {
-	OrganizationName   string
-	RepositoryName     string
-	Token              string
-	OpenshiftPublicURL string
+	GithubBaseURL            string
+	GithubInsecureSkipVerify bool
+	OrganizationName         string
+	RepositoryName           string
+	Token                    string
+	OpenshiftPublicURL       string
 }
 
 var (
@@ -60,6 +62,10 @@ func init() {
 
 	listCmd.Flags().AddFlagSet(openshift.Flags)
 
+	listCmd.Flags().StringVar(&options.GithubBaseURL, "github-base-url", "https://api.github.com/",
+		"The GitHub Base URL - if you use GitHub Enterprise. Format: https://github.domain.tld/api/v3/")
+	listCmd.Flags().BoolVar(&options.GithubInsecureSkipVerify, "github-insecure-skip-tls-verify", false,
+		"If true, the github server's certificate will not be checked for validity. This will make your HTTPS connections insecure.")
 	listCmd.Flags().StringVar(&options.Token, "github-token", os.Getenv("GITHUB_ACCESS_TOKEN"),
 		"The GitHub Access Token - could also be defined by the GITHUB_ACCESS_TOKEN env var. See https://github.com/settings/tokens to get one.")
 	listCmd.Flags().StringVar(&options.OrganizationName, "organization", os.Getenv("GITHUB_ORGANIZATION"),

@@ -13,11 +13,13 @@ import (
 
 // Options represents the command's options
 type Options struct {
-	OrganizationName   string
-	Token              string
-	OpenshiftPublicURL string
-	ResyncPeriod       time.Duration
-	DryRun             bool
+	GithubBaseURL            string
+	GithubInsecureSkipVerify bool
+	OrganizationName         string
+	Token                    string
+	OpenshiftPublicURL       string
+	ResyncPeriod             time.Duration
+	DryRun                   bool
 }
 
 var (
@@ -70,6 +72,10 @@ func init() {
 
 	syncCmd.Flags().AddFlagSet(openshift.Flags)
 
+	syncCmd.Flags().StringVar(&options.GithubBaseURL, "github-base-url", "https://api.github.com/",
+		"The GitHub Base URL - if you use GitHub Enterprise. Format: https://github.domain.tld/api/v3/")
+	syncCmd.Flags().BoolVar(&options.GithubInsecureSkipVerify, "github-insecure-skip-tls-verify", false,
+		"If true, the github server's certificate will not be checked for validity. This will make your HTTPS connections insecure.")
 	syncCmd.Flags().StringVar(&options.Token, "github-token", os.Getenv("GITHUB_ACCESS_TOKEN"),
 		"The GitHub Access Token - could also be defined by the GITHUB_ACCESS_TOKEN env var. See https://github.com/settings/tokens to get one.")
 	syncCmd.Flags().DurationVar(&options.ResyncPeriod, "resync-period", 1*time.Hour,

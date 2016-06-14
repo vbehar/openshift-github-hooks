@@ -1,12 +1,17 @@
 package github
 
 import (
+	"crypto/tls"
+	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/vbehar/openshift-github-hooks/pkg/api"
 
 	"github.com/golang/glog"
 	"github.com/google/go-github/github"
+	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 )
 
@@ -16,16 +21,39 @@ type HooksManager struct {
 }
 
 // NewHooksManager instantiates a HooksManager
-// using the given GitHub access token
-func NewHooksManager(token string) *HooksManager {
+// using the given GitHub base URL and access token
+// (you can leave the baseURL empty to use the default api.github.com endpoint)
+func NewHooksManager(baseURL, token string, insecureSkipVerify bool) (*HooksManager, error) {
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
-	tc := oauth2.NewClient(oauth2.NoContext, ts)
-
-	return &HooksManager{
-		client: github.NewClient(tc),
+	// internal http client - to configure the TLS config
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
+		},
 	}
+	ctx := context.WithValue(oauth2.NoContext, oauth2.HTTPClient, httpClient)
+	tc := oauth2.NewClient(ctx, ts)
+
+	client := github.NewClient(tc)
+	if len(baseURL) > 0 {
+		// ensure the api base URL ends with a "/"
+		if !strings.HasSuffix(baseURL, "/") {
+			baseURL = baseURL + "/"
+		}
+		clientBaseURL, err := url.Parse(baseURL)
+		if err != nil {
+			return nil, err
+		}
+		client.BaseURL = clientBaseURL
+	}
+
+	manager := &HooksManager{
+		client: client,
+	}
+
+	return manager, nil
 }
 
 // RegisterHook registers the given hook (only if the hook does not already exists)

@@ -14,10 +14,12 @@ import (
 
 // listHooks prints the github hooks that references openshift buildconfigs
 func listHooks(options *Options) {
-	hooksManager := github.NewHooksManager(options.Token)
+	hooksManager, err := github.NewHooksManager(options.GithubBaseURL, options.Token, options.GithubInsecureSkipVerify)
+	if err != nil {
+		glog.Fatalf("Failed to connect to GitHub: %v", err)
+	}
 
 	var hooks []api.Hook
-	var err error
 	if len(options.RepositoryName) > 0 {
 		repository := api.GithubRepository{
 			Owner: options.OrganizationName,
